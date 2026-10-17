@@ -42,6 +42,7 @@ export function RoundLiveStatus({
   counts,
   mode,
   switchedCount,
+  switchers = [],
   revealedCount,
   totalPlayers,
   compact = false,
@@ -50,10 +51,12 @@ export function RoundLiveStatus({
   counts: readonly number[];
   mode: "waiting" | "public" | "secret";
   switchedCount?: number;
+  switchers?: readonly string[];
   revealedCount?: number;
   totalPlayers: number;
   compact?: boolean;
 }) {
+  const highestCount = mode === "waiting" ? 0 : Math.max(0, ...counts);
   const status = mode === "secret"
     ? revealedCount !== undefined && revealedCount < totalPlayers
       ? `真实分组揭晓中 · ${revealedCount}/${totalPlayers}`
@@ -69,16 +72,24 @@ export function RoundLiveStatus({
         <div><span>当前人数 <b>{totalPlayers}</b><small>人</small></span><strong>{status}</strong></div>
       </div>
       <div className="round-live-status__packets">
-        {PACKETS.map((packet) => (
-          <div key={packet.id} style={{ "--packet-color": packet.color, "--packet-ink": packet.ink } as React.CSSProperties}>
+        {PACKETS.map((packet) => {
+          const isTop = highestCount > 0 && (counts[packet.id] ?? 0) === highestCount;
+          return <div className={isTop ? "is-top" : ""} key={packet.id} style={{ "--packet-color": packet.color, "--packet-ink": packet.ink } as React.CSSProperties}>
             <i />
             <span>{packet.name}</span>
             <strong>{mode === "waiting" ? "—" : counts[packet.id] ?? 0}{mode === "waiting" ? null : <small>人</small>}</strong>
-          </div>
-        ))}
+            {isTop && <em>TOP</em>}
+          </div>;
+        })}
       </div>
       <div className="round-live-status__truth">
-        {mode === "secret" ? <><span>当前轮次</span><strong>{switchedCount ?? 0} 人反水</strong></> : mode === "waiting" ? <><span>人数已锁定</span><strong>先完成你的提交</strong></> : <><span>秘密结果</span><strong>揭晓后公布反水人数</strong></>}
+        {mode === "secret" ? <>
+          <span>当前轮次</span>
+          <div className="round-live-status__switchers">
+            <strong>{switchedCount ?? 0} 人反水</strong>
+            {switchers.length > 0 && <p aria-label="本轮反水玩家">{switchers.map((switcher) => <i key={switcher}>{switcher}</i>)}</p>}
+          </div>
+        </> : mode === "waiting" ? <><span>人数已锁定</span><strong>先完成你的提交</strong></> : <><span>秘密结果</span><strong>揭晓后公布反水人数与玩家</strong></>}
       </div>
     </section>
   );

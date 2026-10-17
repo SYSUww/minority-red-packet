@@ -242,8 +242,9 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
         balanceLabel={account ? walletBalance ? `${walletBalance} MON` : "读取中…" : "连接钱包后显示"}
         roundProfitLabel={settledRoundProfit === null ? ownAction?.joined ? "待结算" : "—" : `${settledRoundProfit > 0n ? "+" : ""}${formatEther(settledRoundProfit)} MON`}
         roundProfitTone={settledRoundProfit === null ? "neutral" : settledRoundProfit > 0n ? "positive" : settledRoundProfit < 0n ? "negative" : "neutral"}
+        currentRound={snapshot.game.roundNumber}
       />}
-      {snapshot && liveStatus && <RoundLiveStatus roundNumber={snapshot.game.roundNumber} counts={liveStatus.counts} mode={liveStatus.mode} switchedCount={liveStatus.switchedCount} revealedCount={liveStatus.revealedCount} totalPlayers={snapshot.game.playerCount} />}
+      {snapshot && liveStatus && <RoundLiveStatus roundNumber={snapshot.game.roundNumber} counts={liveStatus.counts} mode={liveStatus.mode} switchedCount={liveStatus.switchedCount} switchers={liveStatus.switchers} revealedCount={liveStatus.revealedCount} totalPlayers={snapshot.game.playerCount} />}
       {snapshot && <RoundSwitchHistory items={switchHistory} currentRound={snapshot.game.roundNumber} />}
       <PlayerFlowRail current={playerFlowStep(snapshot, ownAction, Boolean(account))} />
       {account && claimableAmount > 0n && snapshot && snapshot.phase !== "settled" && snapshot.phase !== "cancelled" && <aside className="carryover-prize"><p><span>往轮待领取</span><strong>{formatEther(claimableAmount)} MON</strong></p><button onClick={claim} disabled={busy}>{busy ? "领取中…" : "领取"}</button></aside>}
@@ -376,6 +377,7 @@ function chainLiveStatus(snapshot: ChainGameSnapshot, ownAction: ChainPlayer | n
       counts: snapshot.revealedCounts,
       mode: "secret" as const,
       switchedCount: revealedPlayers.filter((player) => player.hasSignaled && player.signalPacket !== player.revealedPacket).length,
+      switchers: revealedPlayers.filter((player) => player.hasSignaled && player.signalPacket !== player.revealedPacket).map((player) => shortAddress(player.address)),
       revealedCount: revealedPlayers.length,
     };
   }

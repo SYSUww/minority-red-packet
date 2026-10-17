@@ -54,6 +54,9 @@ function MockPlayerGame() {
     switchedCount: roundSummary.switchedCount,
     totalPlayers: roundSummary.results.length,
   }), [round, roundSummary.results.length, roundSummary.switchedCount]);
+  const switcherNames = useMemo(() => roundSummary.results
+    .filter((player) => player.signalPacketId !== player.secretPacketId)
+    .map((player) => player.id === "you" ? name || "你" : player.name), [name, roundSummary.results]);
   const visibleSwitchHistory = step === "result"
     ? upsertRoundSwitch(switchHistory, currentSwitchSummary)
     : switchHistory;
@@ -122,7 +125,7 @@ function MockPlayerGame() {
   if (step === "reveal" && chosenPacket) {
     return (
       <main className="phone-reveal" style={{ "--reveal-color": chosenPacket.color, "--reveal-ink": chosenPacket.ink } as React.CSSProperties}>
-        <RoundLiveStatus roundNumber={round} counts={roundSummary.finalCounts} mode="secret" switchedCount={roundSummary.switchedCount} revealedCount={8} totalPlayers={8} compact />
+        <RoundLiveStatus roundNumber={round} counts={roundSummary.finalCounts} mode="secret" switchedCount={roundSummary.switchedCount} switchers={switcherNames} revealedCount={8} totalPlayers={8} compact />
         <p>第 {round} 轮 · 最终选择</p>
         <span>{chosenPacket.name}</span>
         <strong>0{chosenPacket.id + 1}<small> · 平票优先级 {chosenPacket.id + 1}</small></strong>
@@ -146,8 +149,8 @@ function MockPlayerGame() {
           <span className="mode-tag">本地演示</span>
           <p>#472 · R{String(round).padStart(2, "0")}</p>
         </header>
-        <PlayerIntelligencePanel profiles={playerProfiles} balanceLabel={`${formatEther(mockBalanceWei)} MON`} roundProfitLabel={roundProfitWei === null ? "—" : `${roundProfitWei > 0n ? "+" : ""}${formatEther(roundProfitWei)} MON`} roundProfitTone={roundProfitWei === null ? "neutral" : roundProfitWei > 0n ? "positive" : roundProfitWei < 0n ? "negative" : "neutral"} />
-        <RoundLiveStatus roundNumber={round} counts={roundSummary.finalCounts} mode="secret" switchedCount={roundSummary.switchedCount} revealedCount={8} totalPlayers={8} />
+        <PlayerIntelligencePanel profiles={playerProfiles} balanceLabel={`${formatEther(mockBalanceWei)} MON`} roundProfitLabel={roundProfitWei === null ? "—" : `${roundProfitWei > 0n ? "+" : ""}${formatEther(roundProfitWei)} MON`} roundProfitTone={roundProfitWei === null ? "neutral" : roundProfitWei > 0n ? "positive" : roundProfitWei < 0n ? "negative" : "neutral"} currentRound={round} />
+        <RoundLiveStatus roundNumber={round} counts={roundSummary.finalCounts} mode="secret" switchedCount={roundSummary.switchedCount} switchers={switcherNames} revealedCount={8} totalPlayers={8} />
         <RoundSwitchHistory items={visibleSwitchHistory} currentRound={round} />
         <PlayerFlowRail current="result" />
         <section className="player-panel settlement-panel">
@@ -197,7 +200,7 @@ function MockPlayerGame() {
         <span className="mode-tag">本地演示</span>
         <p>#472 · R{String(round).padStart(2, "0")}</p>
       </header>
-      <PlayerIntelligencePanel profiles={playerProfiles} balanceLabel={`${formatEther(mockBalanceWei)} MON`} roundProfitLabel={stakeIsLocked ? "待结算" : "—"} />
+      <PlayerIntelligencePanel profiles={playerProfiles} balanceLabel={`${formatEther(mockBalanceWei)} MON`} roundProfitLabel={stakeIsLocked ? "待结算" : "—"} currentRound={round} />
       <RoundLiveStatus roundNumber={round} counts={publicCounts} mode={step === "join" || step === "signal" ? "waiting" : "public"} totalPlayers={8} />
       <RoundSwitchHistory items={switchHistory} currentRound={round} />
       <PlayerFlowRail current={flowStep} />

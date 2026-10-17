@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CircleDollarSign, Crosshair, TrendingDown, TrendingUp } from "lucide-react";
+import { CircleDollarSign, Crosshair, TrendingDown, TrendingUp, X } from "lucide-react";
 import { formatEther } from "viem";
 
 import { PACKETS } from "@/lib/game-config";
@@ -14,14 +14,17 @@ export function PlayerIntelligencePanel({
   balanceLabel,
   roundProfitLabel,
   roundProfitTone = "neutral",
+  currentRound,
 }: {
   profiles: readonly PlayerIntelProfile[];
   balanceLabel: string;
   roundProfitLabel: string;
   roundProfitTone?: ProfitTone;
+  currentRound: number | bigint;
 }) {
   const selfId = profiles.find((profile) => profile.isSelf)?.id;
   const [selectedId, setSelectedId] = useState(selfId ?? profiles[0]?.id ?? "");
+  const [detailOpen, setDetailOpen] = useState(false);
 
   useEffect(() => {
     if (profiles.some((profile) => profile.id === selectedId)) return;
@@ -37,7 +40,7 @@ export function PlayerIntelligencePanel({
   const preference = PACKETS[selected.preferencePacketId];
 
   return (
-    <aside className="player-intelligence" aria-label="玩家资产与对手情报">
+    <aside className={`player-intelligence${detailOpen ? " is-detail-open" : ""}`} aria-label="玩家资产与对手情报">
       <section className="player-wallet-card">
         <div><CircleDollarSign size={16} /><span>你的资产</span></div>
         <p><span>当前余额</span><strong>{balanceLabel}</strong></p>
@@ -52,23 +55,27 @@ export function PlayerIntelligencePanel({
         <div className="player-scout-list" role="list" aria-label="所有选手">
           {profiles.map((profile) => {
             const packet = PACKETS[profile.preferencePacketId];
+            const activeRound = profile.rounds.find((round) => round.round === Number(currentRound));
+            const switched = Boolean(activeRound && activeRound.publicPacketId !== null && activeRound.secretPacketId !== null && activeRound.publicPacketId !== activeRound.secretPacketId);
             return (
               <button
                 type="button"
                 key={profile.id}
-                className={`${profile.id === selected.id ? "is-selected" : ""}${profile.isSelf ? " is-self" : ""}`}
-                onClick={() => setSelectedId(profile.id)}
+                className={`${profile.id === selected.id ? "is-selected" : ""}${profile.isSelf ? " is-self" : ""}${switched ? " is-switched" : ""}`}
+                onClick={() => { setSelectedId(profile.id); setDetailOpen(true); }}
                 style={{ "--preference-color": packet.color, "--preference-ink": packet.ink } as React.CSSProperties}
                 aria-pressed={profile.id === selected.id}
               >
                 <i>{profile.displayName.slice(0, 1).toUpperCase()}</i>
                 <span><strong>{profile.displayName}{profile.isSelf ? " · 你" : ""}</strong><small>偏好 {packet.name}</small></span>
+                {switched && <em>反水</em>}
               </button>
             );
           })}
         </div>
 
         <div className="player-scout-detail" style={{ "--preference-color": preference.color, "--preference-ink": preference.ink } as React.CSSProperties}>
+          <button className="player-scout-detail__close" type="button" aria-label="关闭选手详情" onClick={() => setDetailOpen(false)}><X size={16} /></button>
           <div className="player-scout-detail__head">
             <div><span>PLAYER FILE</span><strong>{selected.displayName}</strong></div>
             <p><i />偏好颜色 · {preference.name}</p>
