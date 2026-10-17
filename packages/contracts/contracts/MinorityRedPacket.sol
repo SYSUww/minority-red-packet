@@ -2,12 +2,14 @@
 pragma solidity ^0.8.31;
 
 /// @title Minority Red Packet
-/// @notice A four-packet, commit-reveal minority game with per-game native MON escrow.
+/// @notice A four-packet, weighted-stake commit-reveal minority game.
 contract MinorityRedPacket {
     uint8 public constant PACKET_COUNT = 4;
     uint8 public constant MIN_PLAYERS = 4;
     uint8 public constant MAX_PLAYERS = 8;
     uint8 public constant NO_WINNER = type(uint8).max;
+    uint96 public constant MIN_STAKE = 1 ether;
+    uint96 public constant MAX_STAKE = 10 ether;
 
     bytes32 public constant COMMIT_TYPEHASH = keccak256(
         "MinorityRedPacketCommit(uint256 chainId,address verifyingContract,uint256 gameId,address player,uint8 packetId,bytes32 salt)"
@@ -24,27 +26,26 @@ contract MinorityRedPacket {
     }
 
     struct Game {
-        address host;
         uint64 joinEndBlock;
         uint64 startBlock;
         uint64 signalEndBlock;
         uint64 commitEndBlock;
         uint64 revealEndBlock;
-        uint64 claimEndBlock;
         uint8 playerCount;
         uint8 winnerPacket;
         uint8 winnerCount;
-        bool started;
+        bool exists;
         bool settled;
         bool cancelled;
-        uint96[PACKET_COUNT] packetAmounts;
-        uint256 deposit;
-        uint256 share;
-        uint256 hostRefund;
+        uint256 pot;
+        uint256 winningStake;
+        uint256 losingPot;
+        uint256 remainder;
         uint256 outstandingPrize;
     }
 
     struct PlayerAction {
+        uint96 stakeAmount;
         bytes32 commitment;
         uint8 signalPacket;
         uint8 revealedPacket;
@@ -52,19 +53,18 @@ contract MinorityRedPacket {
         bool hasSignaled;
         bool revealed;
         bool claimed;
+        uint256 payout;
     }
 
     error GameNotFound();
     error InvalidDuration();
-    error InvalidPacketAmounts();
+    error InvalidStake();
     error IncorrectFunding();
-    error NotHost();
     error InvalidPhase();
     error InvalidPacket();
     error InvalidPlayer();
     error DuplicatePlayer();
     error PlayerLimitReached();
-    error TooFewPlayers();
     error NotPlayer();
     error MissingSignal();
     error InvalidCommitment();
@@ -73,26 +73,15 @@ contract MinorityRedPacket {
     error CommitmentMismatch();
     error NoPrize();
     error AlreadyClaimed();
-    error ClaimExpired();
-    error ClaimNotExpired();
-    error NothingToWithdraw();
     error TransferFailed();
     error ReentrantCall();
 
-    event GameCreated(
+    event GameCreated(uint256 indexed gameId, uint64 startBlock);
+    event PlayerJoined(
         uint256 indexed gameId,
-        address indexed host,
-        uint96[PACKET_COUNT] packetAmounts,
-        uint256 deposit,
-        uint64 joinEndBlock
-    );
-    event PlayersRegistered(uint256 indexed gameId, address[] players);
-    event GameStarted(
-        uint256 indexed gameId,
-        uint64 startBlock,
-        uint64 signalEndBlock,
-        uint64 commitEndBlock,
-        uint64 revealEndBlock
+        address indexed player,
+        uint8 registrationIndex,
+        uint96 stakeAmount
     );
     event SignalUpdated(uint256 indexed gameId, address indexed player, uint8 packetId);
     event ChoiceCommitted(uint256 indexed gameId, address indexed player, bytes32 commitment);
@@ -102,25 +91,24 @@ contract MinorityRedPacket {
         uint8[PACKET_COUNT] counts,
         uint8 winnerPacket,
         uint8 winnerCount,
-        uint256 share,
-        uint256 hostRefund,
-        uint64 claimEndBlock
+        uint256 pot,
+        uint256 winningStake,
+        uint256 losingPot,
+        uint256 remainder
     );
     event GameCancelled(uint256 indexed gameId);
     event PrizeClaimed(uint256 indexed gameId, address indexed player, address indexed recipient, uint256 amount);
-    event HostRefundWithdrawn(uint256 indexed gameId, address indexed recipient, uint256 amount);
-    event ExpiredPrizeSwept(uint256 indexed gameId, address indexed recipient, uint256 amount);
 
     uint64 public immutable signalDuration;
     uint64 public immutable commitDuration;
     uint64 public immutable revealDuration;
-    uint64 public immutable claimDuration;
 
     uint256 public nextGameId = 1;
 
     mapping(uint256 gameId => Game game) private _games;
     mapping(uint256 gameId => address[] players) private _players;
     mapping(uint256 gameId => mapping(address player => PlayerAction action)) private _actions;
+    mapping(uint256 gameId => uint8[PACKET_COUNT] counts) private _revealedCounts;
 
     uint256 private _lock = 1;
 
@@ -131,96 +119,63 @@ contract MinorityRedPacket {
         _lock = 1;
     }
 
-    constructor(uint64 signalBlocks, uint64 commitBlocks, uint64 revealBlocks, uint64 claimBlocks) {
-        if (signalBlocks == 0 || commitBlocks == 0 || revealBlocks == 0 || claimBlocks == 0) {
+    constructor(uint64 signalBlocks, uint64 commitBlocks, uint64 revealBlocks) {
+        if (signalBlocks == 0 || commitBlocks == 0 || revealBlocks == 0) {
             revert InvalidDuration();
         }
         signalDuration = signalBlocks;
         commitDuration = commitBlocks;
         revealDuration = revealBlocks;
-        claimDuration = claimBlocks;
     }
 
-    function createGame(
-        uint96[PACKET_COUNT] calldata packetAmounts,
-        uint64 lobbyBlocks
-    ) external payable returns (uint256 gameId) {
-        if (lobbyBlocks == 0 || block.number + lobbyBlocks > type(uint64).max) revert InvalidDuration();
-
-        uint256 total;
-        for (uint8 i = 0; i < PACKET_COUNT; ++i) {
-            // The smallest packet must still pay at least one wei to every possible winner.
-            if (packetAmounts[i] < MAX_PLAYERS || (i > 0 && packetAmounts[i] <= packetAmounts[i - 1])) {
-                revert InvalidPacketAmounts();
-            }
-            total += packetAmounts[i];
-        }
-        if (msg.value != total) revert IncorrectFunding();
+    function createGame(uint64 lobbyBlocks) external returns (uint256 gameId) {
+        if (lobbyBlocks == 0) revert InvalidDuration();
 
         gameId = nextGameId++;
         Game storage game = _games[gameId];
-        game.host = msg.sender;
-        game.joinEndBlock = uint64(block.number + lobbyBlocks);
+        game.exists = true;
         game.winnerPacket = NO_WINNER;
-        game.packetAmounts = packetAmounts;
-        game.deposit = msg.value;
+        _schedule(game, block.number + lobbyBlocks);
 
-        emit GameCreated(gameId, msg.sender, packetAmounts, msg.value, game.joinEndBlock);
+        emit GameCreated(gameId, game.startBlock);
     }
 
-    function registerPlayers(uint256 gameId, address[] calldata players) external {
+    function joinGame(uint256 gameId) external payable {
         Game storage game = _getGame(gameId);
-        if (msg.sender != game.host) revert NotHost();
-        if (phase(gameId) != Phase.Lobby || block.number >= game.joinEndBlock) revert InvalidPhase();
-        if (players.length == 0 || game.playerCount + players.length > MAX_PLAYERS) revert PlayerLimitReached();
+        if (phase(gameId) != Phase.Lobby || block.number >= game.startBlock) revert InvalidPhase();
+        if (
+            msg.value < MIN_STAKE ||
+            msg.value > MAX_STAKE ||
+            msg.value % 1 ether != 0
+        ) revert IncorrectFunding();
 
-        for (uint256 i = 0; i < players.length; ++i) {
-            address player = players[i];
-            if (player == address(0)) revert InvalidPlayer();
-            if (_actions[gameId][player].joined) revert DuplicatePlayer();
+        PlayerAction storage action = _actions[gameId][msg.sender];
+        if (action.joined) revert DuplicatePlayer();
+        if (game.playerCount >= MAX_PLAYERS) revert PlayerLimitReached();
 
-            _actions[gameId][player].joined = true;
-            _players[gameId].push(player);
+        action.joined = true;
+        action.stakeAmount = uint96(msg.value);
+        _players[gameId].push(msg.sender);
+        uint8 registrationIndex = game.playerCount;
+        game.playerCount = registrationIndex + 1;
+        game.pot += msg.value;
+
+        // Filling all seats closes registration without relying on a privileged host.
+        if (game.playerCount == MAX_PLAYERS) {
+            _schedule(game, block.number + 1);
         }
-        game.playerCount += uint8(players.length);
 
-        emit PlayersRegistered(gameId, players);
-    }
-
-    function startGame(uint256 gameId) external {
-        Game storage game = _getGame(gameId);
-        if (msg.sender != game.host) revert NotHost();
-        if (phase(gameId) != Phase.Lobby || block.number >= game.joinEndBlock) revert InvalidPhase();
-        if (game.playerCount < MIN_PLAYERS) revert TooFewPlayers();
-
-        uint256 revealEnd = block.number + signalDuration + commitDuration + revealDuration;
-        if (revealEnd > type(uint64).max) revert InvalidDuration();
-
-        game.started = true;
-        game.startBlock = uint64(block.number);
-        game.signalEndBlock = uint64(block.number + signalDuration);
-        game.commitEndBlock = uint64(block.number + signalDuration + commitDuration);
-        game.revealEndBlock = uint64(revealEnd);
-
-        emit GameStarted(
-            gameId,
-            game.startBlock,
-            game.signalEndBlock,
-            game.commitEndBlock,
-            game.revealEndBlock
-        );
-    }
-
-    function cancelGame(uint256 gameId) external {
-        Game storage game = _getGame(gameId);
-        if (msg.sender != game.host) revert NotHost();
-        if (phase(gameId) != Phase.Lobby) revert InvalidPhase();
-        _cancel(gameId, game);
+        emit PlayerJoined(gameId, msg.sender, registrationIndex, uint96(msg.value));
     }
 
     function expireGame(uint256 gameId) external {
         Game storage game = _getGame(gameId);
-        if (game.started || game.cancelled || game.settled || block.number < game.joinEndBlock) {
+        if (
+            game.cancelled ||
+            game.settled ||
+            game.playerCount >= MIN_PLAYERS ||
+            block.number < game.startBlock
+        ) {
             revert InvalidPhase();
         }
         _cancel(gameId, game);
@@ -263,114 +218,109 @@ contract MinorityRedPacket {
             revert CommitmentMismatch();
         }
 
-        action.revealedPacket = packetId;
         action.revealed = true;
+        action.revealedPacket = packetId;
+        ++_revealedCounts[gameId][packetId];
+
         emit ChoiceRevealed(gameId, msg.sender, packetId);
     }
 
     function settle(uint256 gameId) external {
-        Game storage game = _getGame(gameId);
         if (phase(gameId) != Phase.AwaitingSettlement) revert InvalidPhase();
+        Game storage game = _games[gameId];
+        uint8[PACKET_COUNT] memory counts = _revealedCounts[gameId];
 
-        uint8[PACKET_COUNT] memory counts;
-        address[] storage players = _players[gameId];
-        for (uint256 i = 0; i < players.length; ++i) {
-            PlayerAction storage action = _actions[gameId][players[i]];
-            if (action.revealed) ++counts[action.revealedPacket];
+        uint8 nonEmptyPackets;
+        for (uint8 packetId = 0; packetId < PACKET_COUNT; ++packetId) {
+            if (counts[packetId] > 0) ++nonEmptyPackets;
         }
 
-        uint8 nonEmpty;
-        for (uint8 i = 0; i < PACKET_COUNT; ++i) {
-            if (counts[i] > 0) ++nonEmpty;
-        }
-
-        game.settled = true;
-        if (nonEmpty <= 1) {
-            game.hostRefund = game.deposit;
+        if (nonEmptyPackets <= 1) {
+            _assignRefunds(gameId);
         } else {
-            uint8 winner = NO_WINNER;
-            uint8 minimum = type(uint8).max;
-            for (uint8 i = 0; i < PACKET_COUNT; ++i) {
-                uint8 count = counts[i];
-                if (count == 0) continue;
-                if (count < minimum || (count == minimum && game.packetAmounts[i] > game.packetAmounts[winner])) {
-                    winner = i;
-                    minimum = count;
+            uint8 winnerPacket;
+            uint8 winnerCount = type(uint8).max;
+            for (uint8 packetId = 0; packetId < PACKET_COUNT; ++packetId) {
+                uint8 count = counts[packetId];
+                // Iterating upward and accepting equality gives ties to the higher packet id.
+                if (count > 0 && count <= winnerCount) {
+                    winnerPacket = packetId;
+                    winnerCount = count;
                 }
             }
 
-            uint256 share = uint256(game.packetAmounts[winner]) / minimum;
-            uint256 allocatedPrize = share * minimum;
-            game.winnerPacket = winner;
-            game.winnerCount = minimum;
-            game.share = share;
-            game.outstandingPrize = allocatedPrize;
-            game.hostRefund = game.deposit - allocatedPrize;
-            game.claimEndBlock = _claimEndBlock();
+            game.winnerPacket = winnerPacket;
+            game.winnerCount = winnerCount;
+            address[] storage players = _players[gameId];
+            for (uint256 i = 0; i < players.length; ++i) {
+                PlayerAction storage action = _actions[gameId][players[i]];
+                if (action.revealed && action.revealedPacket == winnerPacket) {
+                    game.winningStake += action.stakeAmount;
+                }
+            }
+            game.losingPot = game.pot - game.winningStake;
+
+            uint256 distributed;
+            for (uint256 i = 0; i < players.length; ++i) {
+                PlayerAction storage action = _actions[gameId][players[i]];
+                if (action.revealed && action.revealedPacket == winnerPacket) {
+                    uint256 bonus = (game.losingPot * action.stakeAmount) / game.winningStake;
+                    action.payout = uint256(action.stakeAmount) + bonus;
+                    distributed += action.payout;
+                }
+            }
+
+            game.remainder = game.pot - distributed;
+            uint256 remainderAssigned;
+            for (uint256 i = 0; i < players.length && remainderAssigned < game.remainder; ++i) {
+                PlayerAction storage action = _actions[gameId][players[i]];
+                if (action.revealed && action.revealedPacket == winnerPacket) {
+                    ++action.payout;
+                    ++remainderAssigned;
+                }
+            }
         }
+
+        game.settled = true;
+        game.outstandingPrize = game.pot;
 
         emit GameSettled(
             gameId,
             counts,
             game.winnerPacket,
             game.winnerCount,
-            game.share,
-            game.hostRefund,
-            game.claimEndBlock
+            game.pot,
+            game.winningStake,
+            game.losingPot,
+            game.remainder
         );
     }
 
     function claim(uint256 gameId, address payable recipient) external nonReentrant {
         Game storage game = _getGame(gameId);
-        if (!game.settled || game.winnerPacket == NO_WINNER) revert NoPrize();
+        Phase currentPhase = phase(gameId);
+        if (currentPhase != Phase.Settled && currentPhase != Phase.Cancelled) revert InvalidPhase();
         if (recipient == address(0)) revert InvalidPlayer();
-        if (block.number >= game.claimEndBlock) revert ClaimExpired();
 
         PlayerAction storage action = _actions[gameId][msg.sender];
-        if (!action.revealed || action.revealedPacket != game.winnerPacket) revert NoPrize();
+        if (!action.joined || action.payout == 0) revert NoPrize();
         if (action.claimed) revert AlreadyClaimed();
 
+        uint256 amount = action.payout;
         action.claimed = true;
-        game.outstandingPrize -= game.share;
-        _send(recipient, game.share);
+        game.outstandingPrize -= amount;
 
-        emit PrizeClaimed(gameId, msg.sender, recipient, game.share);
-    }
+        (bool success, ) = recipient.call{value: amount}("");
+        if (!success) revert TransferFailed();
 
-    function withdrawHostRefund(uint256 gameId, address payable recipient) external nonReentrant {
-        Game storage game = _getGame(gameId);
-        if (msg.sender != game.host) revert NotHost();
-        if ((!game.settled && !game.cancelled) || recipient == address(0)) revert InvalidPhase();
-
-        uint256 amount = game.hostRefund;
-        if (amount == 0) revert NothingToWithdraw();
-        game.hostRefund = 0;
-        _send(recipient, amount);
-
-        emit HostRefundWithdrawn(gameId, recipient, amount);
-    }
-
-    function sweepExpiredPrize(uint256 gameId, address payable recipient) external nonReentrant {
-        Game storage game = _getGame(gameId);
-        if (msg.sender != game.host) revert NotHost();
-        if (!game.settled || game.winnerPacket == NO_WINNER || recipient == address(0)) revert NoPrize();
-        if (block.number < game.claimEndBlock) revert ClaimNotExpired();
-
-        uint256 amount = game.outstandingPrize;
-        if (amount == 0) revert NothingToWithdraw();
-        game.outstandingPrize = 0;
-        _send(recipient, amount);
-
-        emit ExpiredPrizeSwept(gameId, recipient, amount);
+        emit PrizeClaimed(gameId, msg.sender, recipient, amount);
     }
 
     function phase(uint256 gameId) public view returns (Phase) {
         Game storage game = _getGame(gameId);
         if (game.cancelled) return Phase.Cancelled;
         if (game.settled) return Phase.Settled;
-        if (!game.started) {
-            return Phase.Lobby;
-        }
+        if (block.number < game.startBlock || game.playerCount < MIN_PLAYERS) return Phase.Lobby;
         if (block.number < game.signalEndBlock) return Phase.Signal;
         if (block.number < game.commitEndBlock) return Phase.Commit;
         if (block.number < game.revealEndBlock) return Phase.Reveal;
@@ -383,7 +333,17 @@ contract MinorityRedPacket {
         uint8 packetId,
         bytes32 salt
     ) public view returns (bytes32) {
-        return keccak256(abi.encode(COMMIT_TYPEHASH, block.chainid, address(this), gameId, player, packetId, salt));
+        return keccak256(
+            abi.encode(
+                COMMIT_TYPEHASH,
+                block.chainid,
+                address(this),
+                gameId,
+                player,
+                packetId,
+                salt
+            )
+        );
     }
 
     function getGame(uint256 gameId) external view returns (Game memory) {
@@ -400,38 +360,43 @@ contract MinorityRedPacket {
         return _actions[gameId][player];
     }
 
-    function getRevealedCounts(uint256 gameId) external view returns (uint8[PACKET_COUNT] memory counts) {
+    function getRevealedCounts(uint256 gameId) external view returns (uint8[PACKET_COUNT] memory) {
         _getGame(gameId);
-        address[] storage players = _players[gameId];
-        for (uint256 i = 0; i < players.length; ++i) {
-            PlayerAction storage action = _actions[gameId][players[i]];
-            if (action.revealed) ++counts[action.revealedPacket];
-        }
+        return _revealedCounts[gameId];
     }
 
     function _cancel(uint256 gameId, Game storage game) private {
         game.cancelled = true;
-        game.hostRefund = game.deposit;
+        game.outstandingPrize = game.pot;
+        _assignRefunds(gameId);
         emit GameCancelled(gameId);
     }
 
-    function _claimEndBlock() private view returns (uint64) {
-        uint256 endBlock = block.number + claimDuration;
-        if (endBlock > type(uint64).max) revert InvalidDuration();
-        return uint64(endBlock);
+    function _assignRefunds(uint256 gameId) private {
+        address[] storage players = _players[gameId];
+        for (uint256 i = 0; i < players.length; ++i) {
+            PlayerAction storage action = _actions[gameId][players[i]];
+            action.payout = action.stakeAmount;
+        }
     }
 
     function _getGame(uint256 gameId) private view returns (Game storage game) {
         game = _games[gameId];
-        if (game.host == address(0)) revert GameNotFound();
+        if (!game.exists) revert GameNotFound();
+    }
+
+    function _schedule(Game storage game, uint256 startBlock) private {
+        uint256 revealEnd = startBlock + signalDuration + commitDuration + revealDuration;
+        if (revealEnd > type(uint64).max) revert InvalidDuration();
+
+        game.joinEndBlock = uint64(startBlock);
+        game.startBlock = uint64(startBlock);
+        game.signalEndBlock = uint64(startBlock + signalDuration);
+        game.commitEndBlock = uint64(startBlock + signalDuration + commitDuration);
+        game.revealEndBlock = uint64(revealEnd);
     }
 
     function _requirePacket(uint8 packetId) private pure {
         if (packetId >= PACKET_COUNT) revert InvalidPacket();
-    }
-
-    function _send(address payable recipient, uint256 amount) private {
-        (bool success, ) = recipient.call{value: amount}("");
-        if (!success) revert TransferFailed();
     }
 }

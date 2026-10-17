@@ -9,10 +9,10 @@ import {
 } from "./game-engine";
 
 const TEST_PACKETS: readonly Packet[] = [
-  { id: 0, label: "green", amount: 10n },
-  { id: 1, label: "blue", amount: 20n },
-  { id: 2, label: "purple", amount: 30n },
-  { id: 3, label: "gold", amount: 50n },
+  { id: 0, label: "green" },
+  { id: 1, label: "blue" },
+  { id: 2, label: "purple" },
+  { id: 3, label: "gold" },
 ];
 
 describe("MockGameEngine", () => {
@@ -27,7 +27,7 @@ describe("MockGameEngine", () => {
 
     const fullLobby = createGame();
     joinPlayers(fullLobby, 8);
-    expect(() => fullLobby.join({ id: "p9", nickname: "Player 9" })).toThrow(
+    expect(() => fullLobby.join({ id: "p9", nickname: "Player 9" }, 10n)).toThrow(
       "at most 8 players",
     );
   });
@@ -83,55 +83,62 @@ describe("MockGameEngine", () => {
       { packetId: 3, count: 0 },
     ]);
     expect(result.winningPacketId).toBe(2);
-    expect(result.winners).toEqual([{ playerId: "p6", amount: 30n }]);
-    expect(result.hostRefund).toBe(80n);
+    expect(result.winners).toEqual([{ playerId: "p6", amount: 60n }]);
+    expect(result.distributedAmount).toBe(60n);
   });
 
-  it("has no winner when every revealed player chose the same packet", () => {
+  it("refunds every player's stake when every revealed player chose the same packet", () => {
     const game = revealGame([3, 3, 3, 3]);
 
     const result = game.settle();
 
     expect(result.winningPacketId).toBeNull();
     expect(result.winners).toEqual([]);
-    expect(result.distributedAmount).toBe(0n);
-    expect(result.hostRefund).toBe(110n);
+    expect(result.refunds).toEqual([
+      { playerId: "p1", amount: 10n },
+      { playerId: "p2", amount: 10n },
+      { playerId: "p3", amount: 10n },
+      { playerId: "p4", amount: 10n },
+    ]);
+    expect(result.distributedAmount).toBe(40n);
   });
 
-  it("uses the higher-value packet when minority counts are tied", () => {
+  it("uses the higher-priority packet when minority counts are tied", () => {
     const game = revealGame([0, 0, 0, 1, 1, 2, 2]);
 
     const result = game.settle();
 
     expect(result.winningPacketId).toBe(2);
-    expect(result.winnerShare).toBe(15n);
+    expect(result.winningStake).toBe(20n);
+    expect(result.losingPot).toBe(50n);
     expect(result.winners.map(winner => winner.playerId)).toEqual(["p6", "p7"]);
   });
 
-  it("uses the highest-value packet when all four non-empty packets have equal populations", () => {
+  it("uses the highest-priority packet when all four non-empty packets have equal populations", () => {
     const game = revealGame([0, 0, 1, 1, 2, 2, 3, 3]);
 
     const result = game.settle();
 
     expect(result.winningPacketId).toBe(3);
-    expect(result.winnerShare).toBe(25n);
+    expect(result.winningStake).toBe(20n);
+    expect(result.losingPot).toBe(60n);
   });
 
-  it("splits only the winning packet and refunds losing packets plus division remainder", () => {
+  it("splits the entire round pool and assigns the indivisible remainder by registration order", () => {
     const game = revealGame([0, 0, 0, 1, 1, 1, 1]);
 
     const result = game.settle();
 
     expect(result.winningPacketId).toBe(0);
-    expect(result.winnerShare).toBe(3n);
+    expect(result.winningStake).toBe(30n);
+    expect(result.losingPot).toBe(40n);
     expect(result.winners).toEqual([
-      { playerId: "p1", amount: 3n },
-      { playerId: "p2", amount: 3n },
-      { playerId: "p3", amount: 3n },
+      { playerId: "p1", amount: 24n },
+      { playerId: "p2", amount: 23n },
+      { playerId: "p3", amount: 23n },
     ]);
     expect(result.divisionRemainder).toBe(1n);
-    expect(result.distributedAmount).toBe(9n);
-    expect(result.hostRefund).toBe(101n);
+    expect(result.distributedAmount).toBe(70n);
   });
 
   it("treats players who never reveal as abstaining and does not let them block settlement", () => {
@@ -149,7 +156,38 @@ describe("MockGameEngine", () => {
 
     expect(result.winningPacketId).toBe(1);
     expect(result.packetCounts).toContainEqual({ packetId: 3, count: 0 });
-    expect(result.winners.map(winner => winner.playerId)).toEqual(["p3"]);
+    expect(result.winners).toEqual([{ playerId: "p3", amount: 40n }]);
+  });
+
+  it("weights the losing pot by each winner's stake and assigns rounding dust by registration order", () => {
+    const game = new MockGameEngine({ gameId: "game-1", packets: TEST_PACKETS });
+    [1n, 2n, 3n, 4n, 2n, 6n].forEach((stake, index) => {
+      game.join({ id: `p${index + 1}`, nickname: `Player ${index + 1}` }, stake);
+    });
+    game.startSignal();
+    game.startCommit();
+    const choices = [0, 0, 0, 0, 1, 1] as const;
+    choices.forEach((packetId, index) => commitChoice(game, index + 1, packetId));
+    game.startReveal();
+    choices.forEach((packetId, index) => revealChoice(game, index + 1, packetId));
+
+    const result = game.settle();
+
+    expect(result.winningPacketId).toBe(1);
+    expect(result.winningStake).toBe(8n);
+    expect(result.losingPot).toBe(10n);
+    expect(result.divisionRemainder).toBe(1n);
+    expect(result.winners).toEqual([
+      { playerId: "p5", amount: 5n },
+      { playerId: "p6", amount: 13n },
+    ]);
+  });
+
+  it("requires a positive per-player stake", () => {
+    const game = createGame();
+    expect(() => game.join({ id: "p1", nickname: "Player 1" }, 0n)).toThrow(
+      "stake amount must be positive",
+    );
   });
 });
 
@@ -181,7 +219,7 @@ function revealGame(choices: readonly PacketId[]): MockGameEngine {
 function joinPlayers(game: MockGameEngine, count: number, offset = 0): void {
   for (let index = 1; index <= count; index += 1) {
     const playerNumber = index + offset;
-    game.join({ id: `p${playerNumber}`, nickname: `Player ${playerNumber}` });
+    game.join({ id: `p${playerNumber}`, nickname: `Player ${playerNumber}` }, 10n);
   }
 }
 

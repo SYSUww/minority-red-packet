@@ -2,12 +2,10 @@ import {
   createPublicClient,
   createWalletClient,
   custom,
-  decodeEventLog,
   formatEther,
   getAddress,
   http,
   isAddress,
-  parseEther,
   type Address,
   type EIP1193Provider,
   type Hash,
@@ -15,7 +13,8 @@ import {
 } from "viem";
 import minorityRedPacketArtifact from "../../../../packages/contracts/artifacts/contracts/MinorityRedPacket.sol/MinorityRedPacket.json";
 import { monadTestnet } from "@/lib/chain";
-import { minorityRedPacketAbi } from "@/lib/contract-abi";
+import { resolveContractAddress } from "@/lib/contract-address";
+import { OnchainGameGateway } from "@/lib/onchain-game-gateway";
 
 declare global {
   interface Window {
@@ -23,22 +22,17 @@ declare global {
   }
 }
 
-export const GAME_DEPOSIT = parseEther("0.11");
-export const DEFAULT_PACKET_AMOUNTS = ["0.01", "0.02", "0.03", "0.05"].map((amount) => parseEther(amount)) as [
-  bigint,
-  bigint,
-  bigint,
-  bigint,
-];
+export const DEFAULT_LOBBY_BLOCKS = 120n;
+export const CONTRACT_STORAGE_KEY = "minority-red-packet:contract:10143";
 
-const publicClient = createPublicClient({
+export const monadPublicClient = createPublicClient({
   chain: monadTestnet,
   transport: http(monadTestnet.rpcUrls.default.http[0]),
 });
 
 function requireProvider() {
   if (!window.ethereum) {
-    throw new Error("未检测到 MetaMask。请用已安装 MetaMask 的 Chrome 打开此页。");
+    throw new Error("未检测到 MetaMask。当前没有 Privy 凭据，请使用安装了 MetaMask 的浏览器。");
   }
   return window.ethereum;
 }
@@ -53,27 +47,15 @@ async function switchToMonad(provider: EIP1193Provider) {
     if (getErrorCode(error) !== 4902) throw error;
     await provider.request({
       method: "wallet_addEthereumChain",
-      params: [
-        {
-          chainId: `0x${monadTestnet.id.toString(16)}`,
-          chainName: monadTestnet.name,
-          nativeCurrency: monadTestnet.nativeCurrency,
-          rpcUrls: monadTestnet.rpcUrls.default.http,
-          blockExplorerUrls: [monadTestnet.blockExplorers.default.url],
-        },
-      ],
+      params: [{
+        chainId: `0x${monadTestnet.id.toString(16)}`,
+        chainName: monadTestnet.name,
+        nativeCurrency: monadTestnet.nativeCurrency,
+        rpcUrls: monadTestnet.rpcUrls.default.http,
+        blockExplorerUrls: [monadTestnet.blockExplorers.default.url],
+      }],
     } as never);
   }
-}
-
-async function walletFor(account: Address) {
-  const provider = requireProvider();
-  await switchToMonad(provider);
-  return createWalletClient({
-    account,
-    chain: monadTestnet,
-    transport: custom(provider),
-  });
 }
 
 export async function connectInjectedWallet() {
@@ -85,71 +67,69 @@ export async function connectInjectedWallet() {
   return getAddress(account);
 }
 
+export async function createOnchainGateway(contractAddress: Address, account?: Address) {
+  if (!account) return new OnchainGameGateway(contractAddress, monadPublicClient);
+  const provider = requireProvider();
+  await switchToMonad(provider);
+  const walletClient = createWalletClient({ account, chain: monadTestnet, transport: custom(provider) });
+  return new OnchainGameGateway(contractAddress, monadPublicClient, walletClient);
+}
+
 export async function readWalletBalance(account: Address) {
-  const balance = await publicClient.getBalance({ address: account });
+  const balance = await monadPublicClient.getBalance({ address: account });
   return Number(formatEther(balance)).toFixed(3);
 }
 
 export async function deployGameContract(account: Address, onSubmitted?: (hash: Hash) => void) {
-  const walletClient = await walletFor(account);
+  const provider = requireProvider();
+  await switchToMonad(provider);
+  const walletClient = createWalletClient({ account, chain: monadTestnet, transport: custom(provider) });
   const hash = await walletClient.deployContract({
     account,
     chain: monadTestnet,
     abi: minorityRedPacketArtifact.abi,
     bytecode: minorityRedPacketArtifact.bytecode as Hex,
-    args: [60n, 60n, 60n, 1_200n],
+    args: [100n, 100n, 100n],
   } as never);
   onSubmitted?.(hash);
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await monadPublicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success" || !receipt.contractAddress) throw new Error("合约部署失败。");
   return getAddress(receipt.contractAddress);
-}
-
-export async function createFundedGame(
-  account: Address,
-  contractAddress: Address,
-  onSubmitted?: (hash: Hash) => void,
-) {
-  const walletClient = await walletFor(account);
-  const { request } = await publicClient.simulateContract({
-    account,
-    address: contractAddress,
-    abi: minorityRedPacketAbi,
-    functionName: "createGame",
-    args: [DEFAULT_PACKET_AMOUNTS, 1_200n],
-    value: GAME_DEPOSIT,
-  });
-  const hash = await walletClient.writeContract(request);
-  onSubmitted?.(hash);
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  if (receipt.status !== "success") throw new Error("创建游戏交易执行失败。");
-
-  for (const log of receipt.logs) {
-    try {
-      const decoded = decodeEventLog({ abi: minorityRedPacketAbi, data: log.data, topics: log.topics });
-      if (decoded.eventName === "GameCreated") {
-        return { gameId: decoded.args.gameId, hash };
-      }
-    } catch {
-      // Other contracts can emit logs in the same transaction; only our event matters here.
-    }
-  }
-  throw new Error("交易已成功，但未找到 GameCreated 事件。");
 }
 
 export async function validateContractAddress(value: string) {
   if (!isAddress(value)) return null;
   const address = getAddress(value);
-  const code = await publicClient.getBytecode({ address });
+  const code = await monadPublicClient.getBytecode({ address });
   return code && code !== "0x" ? address : null;
+}
+
+export function configuredContractAddress(candidate?: string | null): Address | null {
+  return resolveContractAddress(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS, candidate);
 }
 
 export function explorerTransactionUrl(hash: Hash) {
   return `${monadTestnet.blockExplorers.default.url}/tx/${hash}`;
 }
 
+export function metaMaskMobileUrl(url: string) {
+  return `https://metamask.app.link/dapp/${url.replace(/^https?:\/\//, "")}`;
+}
+
+export function shortAddress(address: Address) {
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+export function humanizeWalletError(error: unknown) {
+  if (getErrorCode(error) === 4001) return "你已在 MetaMask 中取消操作。";
+  if (error instanceof Error) {
+    if (/insufficient funds/i.test(error.message)) return "MON 余额不足，无法支付 stake 或 Gas。";
+    return error.message.split("\n")[0];
+  }
+  return "钱包操作失败，请重试。";
+}
+
 function getErrorCode(error: unknown) {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
   return Number((error as { code: unknown }).code);
 }
-

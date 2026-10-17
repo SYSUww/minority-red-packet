@@ -4,10 +4,16 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Check, LockKeyhole, PartyPopper, ShieldCheck } from "lucide-react";
 import { PACKETS, type PacketId } from "@/lib/game-config";
+import { ChainPlayerGame } from "@/components/chain-player-game";
 
 type PlayerStep = "join" | "signal" | "commit" | "locked" | "reveal" | "result";
 
-export function PlayerGame() {
+export function PlayerGame({ gameId }: { gameId: string }) {
+  if (gameId !== "demo") return <ChainPlayerGame gameId={gameId} />;
+  return <MockPlayerGame />;
+}
+
+function MockPlayerGame() {
   const [step, setStep] = useState<PlayerStep>("join");
   const [name, setName] = useState("");
   const [signalPacket, setSignalPacket] = useState<PacketId | null>(null);
@@ -23,7 +29,7 @@ export function PlayerGame() {
       <main className="phone-reveal" style={{ "--reveal-color": chosenPacket.color, "--reveal-ink": chosenPacket.ink } as React.CSSProperties}>
         <p>最终选择</p>
         <span>{chosenPacket.name}</span>
-        <strong>{chosenPacket.amount}<small> MON</small></strong>
+        <strong>0{chosenPacket.id + 1}<small> · 平票优先级 {chosenPacket.id + 1}</small></strong>
         <div className="raise-phone">现在，举起手机</div>
         <button onClick={() => setStep("result")}>查看结算结果</button>
       </main>
@@ -37,9 +43,9 @@ export function PlayerGame() {
         <p className="eyebrow">结算完成 · #M472</p>
         <h1>{secretPacket === 2 ? "你进入了最小群体" : "这次，你没有进入少数派"}</h1>
         <div className="result-ticket">
-          <span>获胜红包</span><strong>藤紫 · 0.03 MON</strong>
+          <span>获胜红包</span><strong>藤紫 · 优先级 3</strong>
           <span>获胜人数</span><strong>1 人</strong>
-          <span>可领取</span><strong>{secretPacket === 2 ? "0.03 MON" : "0 MON"}</strong>
+          <span>模拟可领取</span><strong>{secretPacket === 2 ? "0.08 MON" : "0 MON"}</strong>
         </div>
         <button className="mobile-primary" disabled={secretPacket !== 2}>
           {secretPacket === 2 ? "领取红包" : "本局未获胜"}
@@ -70,7 +76,7 @@ export function PlayerGame() {
             <input value={name} onChange={(event) => setName(event.target.value)} maxLength={12} placeholder="例如：小满" />
           </label>
           <button className="mobile-primary" disabled={!name.trim()} onClick={() => setStep("signal")}>加入游戏</button>
-          <div className="privacy-note"><ShieldCheck size={16} /> 自动创建临时游戏账户，无需安装钱包</div>
+          <div className="privacy-note"><ShieldCheck size={16} /> 本地演示：不连接钱包，也不会发送真实交易</div>
         </section>
       )}
 
@@ -108,7 +114,7 @@ export function PlayerGame() {
           <div className="lock-facts">
             <span><Check size={16} /> Salt 已安全保存在本机</span>
             <span><Check size={16} /> 选择哈希已最终确认</span>
-            <span><Check size={16} /> 等待主持人统一揭晓</span>
+            <span><Check size={16} /> 等待区块时间进入统一揭晓</span>
           </div>
           <button className="mobile-primary" onClick={() => setStep("reveal")}>模拟统一揭晓</button>
         </section>
@@ -150,7 +156,7 @@ function PacketPicker({
             style={{ "--packet-color": packet.color, "--packet-ink": packet.ink } as React.CSSProperties}
             aria-pressed={selected === packet.id}
           >
-            <span>{packet.name}</span><strong>{packet.amount}</strong><small>MON</small>
+            <span>{packet.name}</span><strong>0{packet.id + 1}</strong><small>平票优先级 {packet.id + 1}</small>
             {selected === packet.id && <i><Check size={14} /></i>}
           </button>
         ))}

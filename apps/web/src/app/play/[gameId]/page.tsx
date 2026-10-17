@@ -1,5 +1,6 @@
 import { PlayerGame } from "@/components/player-game";
 
-export default function PlayerPage() {
-  return <PlayerGame />;
+export default async function PlayerPage({ params }: { params: Promise<{ gameId: string }> }) {
+  const { gameId } = await params;
+  return <PlayerGame gameId={gameId} />;
 }

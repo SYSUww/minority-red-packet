@@ -19,8 +19,8 @@ export function PacketStage() {
           >
             <div className="mini-packet__fold" />
             <p>{packet.name}</p>
-            <strong>{packet.amount}</strong>
-            <small>MON</small>
+            <strong>0{packet.id + 1}</strong>
+            <small>平票优先级 {packet.id + 1}</small>
             <div className="player-chips">
               {groups[packetIndex].map((playerIndex) => (
                 <span key={playerIndex} title={`玩家 ${players[playerIndex]}`}>

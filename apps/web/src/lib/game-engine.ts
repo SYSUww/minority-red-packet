@@ -5,7 +5,6 @@ export type PacketId = 0 | 1 | 2 | 3;
 export type Packet = Readonly<{
   id: PacketId;
   label: string;
-  amount: bigint;
 }>;
 
 export type Player = Readonly<{
@@ -15,6 +14,7 @@ export type Player = Readonly<{
 
 export type PlayerSnapshot = Player &
   Readonly<{
+    stakeAmount: bigint;
     signalPacketId: PacketId | null;
     hasCommitted: boolean;
     revealedPacketId: PacketId | null;
@@ -34,10 +34,11 @@ export type Settlement = Readonly<{
   winningPacketId: PacketId | null;
   packetCounts: readonly PacketCount[];
   winners: readonly PlayerPayout[];
-  winnerShare: bigint;
+  refunds: readonly PlayerPayout[];
+  winningStake: bigint;
+  losingPot: bigint;
   divisionRemainder: bigint;
   distributedAmount: bigint;
-  hostRefund: bigint;
 }>;
 
 export type GameSnapshot = Readonly<{
@@ -55,10 +56,10 @@ export type GameEngineOptions = Readonly<{
 }>;
 
 export const DEFAULT_PACKETS: readonly Packet[] = Object.freeze([
-  { id: 0, label: "green", amount: 10_000_000_000_000_000n },
-  { id: 1, label: "blue", amount: 20_000_000_000_000_000n },
-  { id: 2, label: "purple", amount: 30_000_000_000_000_000n },
-  { id: 3, label: "gold", amount: 50_000_000_000_000_000n },
+  { id: 0, label: "green" },
+  { id: 1, label: "blue" },
+  { id: 2, label: "purple" },
+  { id: 3, label: "gold" },
 ]);
 
 export class GameRuleError extends Error {
@@ -71,6 +72,7 @@ export class GameRuleError extends Error {
 type InternalPlayer = {
   id: string;
   nickname: string;
+  stakeAmount: bigint;
   signalPacketId: PacketId | null;
   commitment: string | null;
   revealedPacketId: PacketId | null;
@@ -143,6 +145,7 @@ export class MockGameEngine {
           Object.freeze({
             id: player.id,
             nickname: player.nickname,
+            stakeAmount: player.stakeAmount,
             signalPacketId: player.signalPacketId,
             hasCommitted: player.commitment !== null,
             revealedPacketId: player.revealedPacketId,
@@ -154,7 +157,7 @@ export class MockGameEngine {
     });
   }
 
-  join(player: Player): GameSnapshot {
+  join(player: Player, stakeAmount: bigint): GameSnapshot {
     this.expectPhase("lobby");
 
     const id = player.id.trim();
@@ -164,6 +167,9 @@ export class MockGameEngine {
     }
     if (!nickname) {
       throw new GameRuleError("nickname is required");
+    }
+    if (stakeAmount <= 0n) {
+      throw new GameRuleError("stake amount must be positive");
     }
     if (this.players.has(id)) {
       throw new GameRuleError(`player ${id} has already joined`);
@@ -175,6 +181,7 @@ export class MockGameEngine {
     this.players.set(id, {
       id,
       nickname,
+      stakeAmount,
       signalPacketId: null,
       commitment: null,
       revealedPacketId: null,
@@ -272,10 +279,13 @@ export class MockGameEngine {
         winningPacketId: null,
         packetCounts,
         winners: [],
-        winnerShare: 0n,
+        refunds: [...this.players.values()].map(player =>
+          Object.freeze({ playerId: player.id, amount: player.stakeAmount }),
+        ),
+        winningStake: 0n,
+        losingPot: 0n,
         divisionRemainder: 0n,
-        distributedAmount: 0n,
-        hostRefund: this.totalPot,
+        distributedAmount: this.totalPot,
       });
       this.phase = "settled";
       return this.settlement;
@@ -284,31 +294,44 @@ export class MockGameEngine {
     const minimumCount = Math.min(...nonEmptyPackets.map(packet => counts.get(packet.id) ?? 0));
     const winningPacket = nonEmptyPackets
       .filter(packet => counts.get(packet.id) === minimumCount)
-      .reduce((winner, packet) => (packet.amount > winner.amount ? packet : winner));
-    const winnerIds = [...this.players.values()]
-      .filter(player => player.revealedPacketId === winningPacket.id)
-      .map(player => player.id);
-    const winnerCount = BigInt(winnerIds.length);
-    const winnerShare = winningPacket.amount / winnerCount;
-    const distributedAmount = winnerShare * winnerCount;
-    const divisionRemainder = winningPacket.amount - distributedAmount;
-    const winners = winnerIds.map(playerId => Object.freeze({ playerId, amount: winnerShare }));
+      .reduce((winner, packet) => (packet.id > winner.id ? packet : winner));
+    const winningPlayers = [...this.players.values()].filter(
+      player => player.revealedPacketId === winningPacket.id,
+    );
+    const winningStake = winningPlayers.reduce((total, player) => total + player.stakeAmount, 0n);
+    const losingPot = this.totalPot - winningStake;
+    const proportionalWinners = winningPlayers.map(player => ({
+      playerId: player.id,
+      amount: player.stakeAmount + (losingPot * player.stakeAmount) / winningStake,
+    }));
+    const distributedBeforeRemainder = proportionalWinners.reduce(
+      (total, winner) => total + winner.amount,
+      0n,
+    );
+    const divisionRemainder = this.totalPot - distributedBeforeRemainder;
+    const winners = proportionalWinners.map((winner, index) =>
+      Object.freeze({
+        ...winner,
+        amount: winner.amount + (BigInt(index) < divisionRemainder ? 1n : 0n),
+      }),
+    );
 
     this.settlement = freezeSettlement({
       winningPacketId: winningPacket.id,
       packetCounts,
       winners,
-      winnerShare,
+      refunds: [],
+      winningStake,
+      losingPot,
       divisionRemainder,
-      distributedAmount,
-      hostRefund: this.totalPot - distributedAmount,
+      distributedAmount: this.totalPot,
     });
     this.phase = "settled";
     return this.settlement;
   }
 
   private get totalPot(): bigint {
-    return this.packets.reduce((total, packet) => total + packet.amount, 0n);
+    return [...this.players.values()].reduce((total, player) => total + player.stakeAmount, 0n);
   }
 
   private expectPhase(expected: GamePhase): void {
@@ -340,7 +363,6 @@ function validatePackets(packets: readonly Packet[]): void {
   }
 
   const ids = new Set<PacketId>();
-  const amounts = new Set<bigint>();
   for (const packet of packets) {
     if (![0, 1, 2, 3].includes(packet.id)) {
       throw new GameRuleError(`invalid packet id ${packet.id}`);
@@ -351,14 +373,7 @@ function validatePackets(packets: readonly Packet[]): void {
     if (!packet.label.trim()) {
       throw new GameRuleError("packet label is required");
     }
-    if (packet.amount <= 0n) {
-      throw new GameRuleError("packet amount must be positive");
-    }
-    if (amounts.has(packet.amount)) {
-      throw new GameRuleError("packet amounts must be unique");
-    }
     ids.add(packet.id);
-    amounts.add(packet.amount);
   }
 }
 
@@ -367,5 +382,6 @@ function freezeSettlement(settlement: Settlement): Settlement {
     ...settlement,
     packetCounts: Object.freeze([...settlement.packetCounts]),
     winners: Object.freeze([...settlement.winners]),
+    refunds: Object.freeze([...settlement.refunds]),
   });
 }

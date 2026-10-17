@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { ArrowRight, Eye, LockKeyhole, ScanLine, ShieldCheck } from "lucide-react";
+import { ArrowRight, Eye, FlaskConical, LockKeyhole, ScanLine, ShieldCheck } from "lucide-react";
 import { PacketStage } from "@/components/packet-stage";
+import { RoomEntry } from "@/components/room-entry";
 import { SiteHeader } from "@/components/site-header";
 import { PHASES } from "@/lib/game-config";
 
@@ -17,19 +18,23 @@ export default function HomePage() {
             <em>然后悄悄离开。</em>
           </h1>
           <p className="hero-intro">
-            先公开站队，再秘密选择。最终人数最少的红包获胜；人数相同时，金额更大的红包胜出。
+            先公开站队，再秘密选择。最终人数最少的红包获胜；赢家按各自投入权重分配败者资金，人数相同时按固定优先级决胜。
           </p>
+          <RoomEntry />
           <div className="hero-actions">
             <Link className="button button-primary" href="/host">
-              创建红包局 <ArrowRight size={18} />
+              创建或查看房间 <ArrowRight size={18} />
             </Link>
             <Link className="button button-ghost" href="/play/demo">
               <ScanLine size={18} /> 体验玩家端
             </Link>
+            <Link className="button button-ghost" href="/test">
+              <FlaskConical size={18} /> 本地多人测试
+            </Link>
           </div>
           <div className="trust-line">
             <ShieldCheck size={17} />
-            <span>选择不可偷看，结果不可篡改，奖金由合约托管。</span>
+            <span>玩家付 stake 进入奖池，选择不可偷看，奖金按合约结果领取。</span>
           </div>
         </div>
         <div className="hero-stage">
@@ -40,7 +45,7 @@ export default function HomePage() {
 
       <section className="mechanic" aria-labelledby="mechanic-title">
         <div className="section-heading">
-          <p className="eyebrow">一局 · 四幕</p>
+          <p className="eyebrow">一轮 · 四幕</p>
           <h2 id="mechanic-title">不是比手快，是猜你会怎么猜。</h2>
         </div>
         <ol className="phase-list">
