@@ -73,8 +73,69 @@ pnpm --filter @minority-red-packet/contracts deploy:testnet
 
 - `GET /api/history`：读取记录；支持 `playerId`、`roomId`、`source=mock|onchain` 与 `limit` 查询参数。
 - `POST /api/history`：批量写入同一轮的 1–8 名玩家记录，供受信任的结算流程使用。
-- `GET /api/decision`：查看未来 LLM 适配器的请求和输出约定。
-- `POST /api/decision`：按玩家返回历史、统计和当前轮上下文；目前不会调用模型，返回状态 `adapter_required` 与 `decision: null`。
+- `GET /api/agent`：Agent 协议发现，返回链、阶段、动作、状态接口与 Adapter 约定。
+- `GET /api/agent/state?roomId={房间号}&playerId={钱包地址}`：读取经过隐私过滤的实时链上状态。秘密选择只会在 Reveal 后出现，commitment 与 Salt 永远不会返回。
+- `POST /api/agent/turn`：读取实时状态与历史，为当前阶段生成模型上下文；配置 Adapter 后会把该上下文发给大模型，校验其动作并返回外部钱包执行计划。
+- `GET/POST /api/decision`：保留的历史决策上下文接口；新 Agent 应优先使用 `/api/agent/*`。
+
+Agent 的模型与钱包职责分离：模型只能从当前 `legalActions` 中选择动作；外部 Agent Runtime 使用自己的钱包签名交易。服务端不接收私钥，Commit 的随机 Salt 与最终红包编号保存在 Agent 本地执行器，只有 commitment 上链。阶段调用顺序如下：
+
+```text
+GET state → POST turn → 模型决策 → Agent 钱包执行 → 等待阶段变化 → 重复
+```
+
+配置一个兼容该协议的 LLM Adapter：
+
+```bash
+AGENT_ADAPTER_URL=https://your-agent-adapter.example/turn
+AGENT_ADAPTER_TOKEN=optional-bearer-token
+AGENT_ADAPTER_TIMEOUT_MS=12000
+AGENT_RPC_TIMEOUT_MS=8000
+AGENT_API_TOKEN=production-agent-api-token
+```
+
+生产环境建议设置 `AGENT_API_TOKEN`，调用 `/api/agent/turn` 时通过 `Authorization: Bearer ...` 传入，避免公开接口被滥用并产生模型费用。`AGENT_ADAPTER_TOKEN` 则仅用于本服务访问 Adapter，两者不要复用。
+
+游戏会向 Adapter 发送：
+
+```json
+{
+  "event": "minority-red-packet.turn",
+  "context": {
+    "instruction": "阶段规则与安全约束",
+    "observation": { "phase": "signal", "legalActions": ["signal", "wait"] },
+    "historySummary": {},
+    "history": [],
+    "responseSchema": {}
+  }
+}
+```
+
+Adapter 返回直接决策对象或包在 `decision` 字段中的对象：
+
+```json
+{
+  "decision": {
+    "action": "signal",
+    "packetId": 2,
+    "confidence": 0.74,
+    "rationale": "当前公开人数较少，保留后续反水空间"
+  }
+}
+```
+
+各阶段动作：`lobby → join`、`signal → signal`、`commit → commit`、`reveal → reveal`、`awaiting-settlement → settle`、`settled/cancelled → claim | open_next_round`。所有阶段都允许 `wait`。Join 还需要 `stakeUnits: 1..10`，Commit 只让模型给出 `packetId`，具体 Salt 和 commitment 由 Agent Runtime 本地生成。
+
+最小调用示例：
+
+```bash
+curl 'http://localhost:3000/api/agent/state?roomId=1&playerId=0x你的Agent钱包地址'
+
+curl -X POST 'http://localhost:3000/api/agent/turn' \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer production-agent-api-token' \
+  -d '{"roomId":"1","playerId":"0x你的Agent钱包地址"}'
+```
 
 本地可以通过 `PLAYER_HISTORY_PATH` 改写 JSON 文件位置。该文件方案适合当前单机测试；部署到无持久磁盘或多实例环境时，应把相同接口背后的存储替换为数据库或对象存储。
 
