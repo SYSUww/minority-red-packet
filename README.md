@@ -9,7 +9,7 @@
 - `/`：产品入口与玩法说明；
 - `/host`：兼容旧路径的链上房间大厅，可部署协议、创建房间或按房间号查看状态；
 - `/test`：完全离线的本地多人排练台，可用 4—8 名虚拟玩家逐阶段或一键测试整局；
-- `/play/demo`：不发交易的移动端体验，可演示公开站队、秘密反水、锁定与结果；
+- `/play/demo`：不发交易的移动端体验；提交公开站队前隐藏人数，提交后显示公开分布，秘密揭晓后显示真实分组与逐轮反水人数；
 - `/play/:gameId`：真实玩家端；`gameId` 是持续有效的房间号，玩家逐轮完成连接钱包、支付押金、Signal、Commit、Reveal 与 Claim；
 - `apps/web/src/lib/game-engine.ts`：不依赖 UI 的完整本地规则引擎；
 - `packages/contracts/contracts/MinorityRedPacket.sol`：真实 MON 托管、Commit–Reveal、少数派结算、领取与退款合约；

@@ -22,7 +22,8 @@ import {
 import type { ChainGameSnapshot, ChainPlayer, TransactionProgress } from "@/lib/onchain-game-gateway";
 import { monadTestnet } from "@/lib/chain";
 import { persistChainRoundHistory } from "@/lib/persist-chain-history";
-import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, RoundLiveStatus, StakeAmountPicker, type PlayerFlowStep } from "@/components/player-flow-ui";
+import { loadRoundSwitches, upsertRoundSwitch, type RoundSwitchSummary } from "@/lib/round-switch-history";
+import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, RoundLiveStatus, RoundSwitchHistory, StakeAmountPicker, type PlayerFlowStep } from "@/components/player-flow-ui";
 
 const vault = new CommitVault();
 
@@ -40,6 +41,7 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
   const [tx, setTx] = useState<TransactionProgress | null>(null);
   const [mobileWalletUrl, setMobileWalletUrl] = useState("");
   const [claimableAmount, setClaimableAmount] = useState(0n);
+  const [switchHistory, setSwitchHistory] = useState<readonly RoundSwitchSummary[]>([]);
 
   useEffect(() => {
     setMobileWalletUrl(metaMaskMobileUrl(window.location.href));
@@ -53,12 +55,27 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
     setContractAddress(configuredContractAddress(fromQuery || fromStorage));
   }, [searchParams]);
 
+  useEffect(() => {
+    if (!contractAddress || gameId === null) return;
+    const roomId = `MONAD-10143:${contractAddress.toLowerCase()}:${gameId.toString()}`;
+    void loadRoundSwitches(roomId, "onchain").then(setSwitchHistory).catch(() => undefined);
+  }, [contractAddress, gameId]);
+
   const refresh = useCallback(async () => {
     if (!contractAddress || gameId === null) return;
     const gateway = await createOnchainGateway(contractAddress);
     const next = await gateway.readSnapshot(gameId);
     setSnapshot(next);
     void persistChainRoundHistory(contractAddress, gameId, next).catch(() => undefined);
+    if (next.phase === "settled" || next.phase === "cancelled") {
+      const revealed = next.players.filter((player) => player.revealed);
+      const summary = {
+        round: Number(next.game.roundNumber),
+        switchedCount: revealed.filter((player) => player.hasSignaled && player.signalPacket !== player.revealedPacket).length,
+        totalPlayers: next.players.length,
+      };
+      setSwitchHistory((current) => upsertRoundSwitch(current, summary));
+    }
     if (account) {
       setClaimableAmount(await gateway.readClaimable(gameId, account));
       const own = next.players.find((player) => player.address.toLowerCase() === account.toLowerCase());
@@ -166,7 +183,7 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
   if (gameId === null) return <PlayerError message="房间号无效，请重新输入。" />;
   if (!contractAddress) return <PlayerError message="当前环境还没有配置统一协议地址。请先从房间二维码进入，或配置 NEXT_PUBLIC_CONTRACT_ADDRESS。" />;
 
-  const liveStatus = snapshot ? chainLiveStatus(snapshot) : null;
+  const liveStatus = snapshot ? chainLiveStatus(snapshot, ownAction) : null;
 
   return (
     <main className="player-shell chain-player">
@@ -177,6 +194,7 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
         {tx?.hash && <a href={explorerTransactionUrl(tx.hash)} target="_blank" rel="noreferrer">{txLabel(tx)} <ExternalLink size={12} /></a>}
       </section>
       {snapshot && liveStatus && <RoundLiveStatus roundNumber={snapshot.game.roundNumber} counts={liveStatus.counts} mode={liveStatus.mode} switchedCount={liveStatus.switchedCount} revealedCount={liveStatus.revealedCount} totalPlayers={snapshot.game.playerCount} />}
+      {snapshot && <RoundSwitchHistory items={switchHistory} currentRound={snapshot.game.roundNumber} />}
       <PlayerFlowRail current={playerFlowStep(snapshot, ownAction, Boolean(account))} />
       {account && claimableAmount > 0n && snapshot && snapshot.phase !== "settled" && snapshot.phase !== "cancelled" && <aside className="carryover-prize"><p><span>往轮待领取</span><strong>{formatEther(claimableAmount)} MON</strong></p><button onClick={claim} disabled={busy}>{busy ? "领取中…" : "领取"}</button></aside>}
 
@@ -285,7 +303,7 @@ function playerFlowStep(snapshot: ChainGameSnapshot | null, ownAction: ChainPlay
   if (snapshot.phase === "reveal" || snapshot.phase === "awaiting-settlement") return "reveal";
   return "result";
 }
-function chainLiveStatus(snapshot: ChainGameSnapshot) {
+function chainLiveStatus(snapshot: ChainGameSnapshot, ownAction: ChainPlayer | null) {
   const truthVisible = snapshot.phase === "reveal" || snapshot.phase === "awaiting-settlement" || snapshot.phase === "settled";
   if (truthVisible) {
     const revealedPlayers = snapshot.players.filter((player) => player.revealed);
@@ -298,7 +316,7 @@ function chainLiveStatus(snapshot: ChainGameSnapshot) {
   }
   const counts = [0, 0, 0, 0];
   for (const player of snapshot.players) if (player.hasSignaled) counts[player.signalPacket] += 1;
-  return { counts, mode: snapshot.phase === "signal" || snapshot.phase === "commit" ? "public" as const : "waiting" as const };
+  return { counts, mode: ownAction?.hasSignaled && (snapshot.phase === "signal" || snapshot.phase === "commit") ? "public" as const : "waiting" as const };
 }
 function phaseLabel(phase: ChainGameSnapshot["phase"]) { return ({ lobby: "等待加入", signal: "公开站队", commit: "秘密锁定", reveal: "同时揭晓", "awaiting-settlement": "等待结算", settled: "结算完成", cancelled: "游戏取消" } as const)[phase]; }
 function txLabel(tx: TransactionProgress) { return tx.state === "submitted" ? "交易已提交" : tx.state === "included" ? "已进入区块" : tx.state === "finalized" ? "已最终确认" : "等待 MetaMask"; }

@@ -3,6 +3,7 @@
 import { ArrowRight, Check, Radio } from "lucide-react";
 
 import { PACKETS, type PacketId } from "@/lib/game-config";
+import type { RoundSwitchSummary } from "@/lib/round-switch-history";
 
 export type PlayerFlowStep = "join" | "signal" | "commit" | "reveal" | "result";
 
@@ -59,25 +60,43 @@ export function RoundLiveStatus({
       : "秘密分组已揭晓"
     : mode === "public"
       ? "公开站队人数"
-      : "等待本轮站队";
+      : "提交站队后显示人数";
 
   return (
     <section className={`round-live-status is-${mode}${compact ? " is-compact" : ""}`} aria-label={`第 ${roundNumber.toString()} 轮实时状态`}>
       <div className="round-live-status__head">
         <p><Radio size={13} /> LIVE · ROUND {roundNumber.toString().padStart(2, "0")}</p>
-        <strong>{status}</strong>
+        <div><span>总人数 <b>{totalPlayers}</b></span><strong>{status}</strong></div>
       </div>
       <div className="round-live-status__packets">
         {PACKETS.map((packet) => (
           <div key={packet.id} style={{ "--packet-color": packet.color, "--packet-ink": packet.ink } as React.CSSProperties}>
             <i />
             <span>{packet.name}</span>
-            <strong>{counts[packet.id] ?? 0}<small>人</small></strong>
+            <strong>{mode === "waiting" ? "—" : counts[packet.id] ?? 0}{mode === "waiting" ? null : <small>人</small>}</strong>
           </div>
         ))}
       </div>
       <div className="round-live-status__truth">
-        {mode === "secret" ? <><span>当前轮次</span><strong>{switchedCount ?? 0} 人反水</strong></> : <><span>秘密结果</span><strong>揭晓后公布反水人数</strong></>}
+        {mode === "secret" ? <><span>当前轮次</span><strong>{switchedCount ?? 0} 人反水</strong></> : mode === "waiting" ? <><span>人数已锁定</span><strong>先完成你的提交</strong></> : <><span>秘密结果</span><strong>揭晓后公布反水人数</strong></>}
+      </div>
+    </section>
+  );
+}
+
+export function RoundSwitchHistory({ items, currentRound }: { items: readonly RoundSwitchSummary[]; currentRound: number | bigint }) {
+  if (items.length === 0) return null;
+  return (
+    <section className="round-switch-history" aria-label="每轮反水人数">
+      <div className="round-switch-history__heading"><span>反水档案</span><strong>每轮秘密揭晓后公开</strong></div>
+      <div>
+        {items.slice(-5).map((item) => (
+          <article className={item.round === Number(currentRound) ? "is-current" : ""} key={item.round}>
+            <span>R{String(item.round).padStart(2, "0")}</span>
+            <strong>{item.switchedCount} 人反水</strong>
+            <small>{item.totalPlayers} 人完成本轮</small>
+          </article>
+        ))}
       </div>
     </section>
   );

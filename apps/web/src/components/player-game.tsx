@@ -6,8 +6,9 @@ import { ArrowLeft, Check, LockKeyhole, PartyPopper, ShieldCheck } from "lucide-
 import { formatEther } from "viem";
 import { PACKETS, type PacketId } from "@/lib/game-config";
 import { createMockRoundPlayers, settleMockRound } from "@/lib/mock-round";
+import { upsertRoundSwitch, type RoundSwitchSummary } from "@/lib/round-switch-history";
 import { ChainPlayerGame } from "@/components/chain-player-game";
-import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, RoundLiveStatus, StakeAmountPicker, type PlayerFlowStep } from "@/components/player-flow-ui";
+import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, RoundLiveStatus, RoundSwitchHistory, StakeAmountPicker, type PlayerFlowStep } from "@/components/player-flow-ui";
 
 type PlayerStep = "join" | "signal" | "commit" | "locked" | "reveal" | "result";
 
@@ -23,6 +24,7 @@ function MockPlayerGame() {
   const [secretPacket, setSecretPacket] = useState<PacketId | null>(null);
   const [stakeUnits, setStakeUnits] = useState(3);
   const [round, setRound] = useState(1);
+  const [switchHistory, setSwitchHistory] = useState<readonly RoundSwitchSummary[]>([]);
 
   const chosenPacket = useMemo(
     () => PACKETS.find((packet) => packet.id === secretPacket),
@@ -40,6 +42,14 @@ function MockPlayerGame() {
     if (signalPacket === null) counts[0] -= 1;
     return counts;
   }, [roundSummary.publicCounts, signalPacket, step]);
+  const currentSwitchSummary = useMemo(() => ({
+    round,
+    switchedCount: roundSummary.switchedCount,
+    totalPlayers: roundSummary.results.length,
+  }), [round, roundSummary.results.length, roundSummary.switchedCount]);
+  const visibleSwitchHistory = step === "result"
+    ? upsertRoundSwitch(switchHistory, currentSwitchSummary)
+    : switchHistory;
 
   if (step === "reveal" && chosenPacket) {
     return (
@@ -69,6 +79,7 @@ function MockPlayerGame() {
           <p>#472 · R{String(round).padStart(2, "0")}</p>
         </header>
         <RoundLiveStatus roundNumber={round} counts={roundSummary.finalCounts} mode="secret" switchedCount={roundSummary.switchedCount} revealedCount={8} totalPlayers={8} />
+        <RoundSwitchHistory items={visibleSwitchHistory} currentRound={round} />
         <PlayerFlowRail current="result" />
         <section className="player-panel settlement-panel">
           <div className={`settlement-hero${won ? " is-won" : " is-lost"}`} style={winnerPacket ? { "--result-color": winnerPacket.color, "--result-ink": winnerPacket.ink } as React.CSSProperties : undefined}>
@@ -96,6 +107,7 @@ function MockPlayerGame() {
           </div>
           <div className="mock-result-note"><PartyPopper size={17} /><span>这是流程演示，不会产生真实资产领取。</span></div>
           <button className="mobile-text" onClick={() => {
+            setSwitchHistory((current) => upsertRoundSwitch(current, currentSwitchSummary));
             setStep("join");
             setSignalPacket(null);
             setSecretPacket(null);
@@ -116,7 +128,8 @@ function MockPlayerGame() {
         <span className="mode-tag">本地演示</span>
         <p>#472 · R{String(round).padStart(2, "0")}</p>
       </header>
-      <RoundLiveStatus roundNumber={round} counts={publicCounts} mode={step === "join" ? "waiting" : "public"} totalPlayers={step === "join" ? 0 : 8} />
+      <RoundLiveStatus roundNumber={round} counts={publicCounts} mode={step === "join" || step === "signal" ? "waiting" : "public"} totalPlayers={8} />
+      <RoundSwitchHistory items={switchHistory} currentRound={round} />
       <PlayerFlowRail current={flowStep} />
 
       {step === "join" && (
