@@ -245,7 +245,7 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
         roundProfitTone={settledRoundProfit === null ? "neutral" : settledRoundProfit > 0n ? "positive" : settledRoundProfit < 0n ? "negative" : "neutral"}
         currentRound={snapshot.game.roundNumber}
       />}
-      {snapshot && liveStatus && <RoundLiveStatus roundNumber={snapshot.game.roundNumber} counts={liveStatus.counts} mode={liveStatus.mode} switchedCount={liveStatus.switchedCount} switchers={liveStatus.switchers} revealedCount={liveStatus.revealedCount} totalPlayers={snapshot.game.playerCount} />}
+      {snapshot && liveStatus && <RoundLiveStatus roundNumber={snapshot.game.roundNumber} counts={liveStatus.counts} mode={liveStatus.mode} switchedCount={liveStatus.switchedCount} players={liveStatus.players} revealedCount={liveStatus.revealedCount} totalPlayers={snapshot.game.playerCount} />}
       {snapshot && <RoundSwitchHistory items={switchHistory} currentRound={snapshot.game.roundNumber} />}
       <PlayerFlowRail current={chainFlowStep} />
       {account && claimableAmount > 0n && snapshot && snapshot.phase !== "settled" && snapshot.phase !== "cancelled" && <aside className="carryover-prize"><p><span>往轮待领取</span><strong>{formatEther(claimableAmount)} MON</strong></p><button onClick={claim} disabled={busy}>{busy ? "领取中…" : "领取"}</button></aside>}
@@ -381,6 +381,12 @@ function playerFlowStep(snapshot: ChainGameSnapshot | null, ownAction: ChainPlay
   return "result";
 }
 function chainLiveStatus(snapshot: ChainGameSnapshot, ownAction: ChainPlayer | null) {
+  const players = snapshot.players.map((player) => ({
+    id: player.address,
+    name: shortAddress(player.address),
+    publicPacketId: player.hasSignaled ? player.signalPacket as PacketId : null,
+    secretPacketId: player.revealed ? player.revealedPacket as PacketId : null,
+  }));
   const truthVisible = snapshot.phase === "reveal" || snapshot.phase === "awaiting-settlement" || snapshot.phase === "settled";
   if (truthVisible) {
     const revealedPlayers = snapshot.players.filter((player) => player.revealed);
@@ -388,13 +394,13 @@ function chainLiveStatus(snapshot: ChainGameSnapshot, ownAction: ChainPlayer | n
       counts: snapshot.revealedCounts,
       mode: "secret" as const,
       switchedCount: revealedPlayers.filter((player) => player.hasSignaled && player.signalPacket !== player.revealedPacket).length,
-      switchers: revealedPlayers.filter((player) => player.hasSignaled && player.signalPacket !== player.revealedPacket).map((player) => shortAddress(player.address)),
+      players,
       revealedCount: revealedPlayers.length,
     };
   }
   const counts = [0, 0, 0, 0];
   for (const player of snapshot.players) if (player.hasSignaled) counts[player.signalPacket] += 1;
-  return { counts, mode: ownAction?.hasSignaled && (snapshot.phase === "signal" || snapshot.phase === "commit") ? "public" as const : "waiting" as const };
+  return { counts, players, mode: ownAction?.hasSignaled && (snapshot.phase === "signal" || snapshot.phase === "commit") ? "public" as const : "waiting" as const };
 }
 function phaseLabel(phase: ChainGameSnapshot["phase"]) { return ({ lobby: "等待加入", signal: "公开站队", commit: "秘密锁定", reveal: "同时揭晓", "awaiting-settlement": "等待结算", settled: "结算完成", cancelled: "游戏取消" } as const)[phase]; }
 function txLabel(tx: TransactionProgress) { return tx.state === "submitted" ? "交易已提交" : tx.state === "included" ? "已进入区块" : tx.state === "finalized" ? "已最终确认" : "等待 MetaMask"; }

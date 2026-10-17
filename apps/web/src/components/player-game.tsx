@@ -11,7 +11,7 @@ import type { PlayerHistoryRecord } from "@/lib/player-history";
 import { loadRoundSwitches, upsertRoundSwitch, type RoundSwitchSummary } from "@/lib/round-switch-history";
 import { ChainPlayerGame } from "@/components/chain-player-game";
 import { PlayerIntelligencePanel } from "@/components/player-intelligence-panel";
-import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, ResultDetailSheet, RoundLiveStatus, RoundSwitchHistory, StakeAmountPicker, type PlayerFlowStep, type ResultDetailView } from "@/components/player-flow-ui";
+import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, ResultDetailSheet, RoundLiveStatus, RoundSwitchHistory, StakeAmountPicker, type LivePlayerChoice, type PlayerFlowStep, type ResultDetailView } from "@/components/player-flow-ui";
 
 type PlayerStep = "join" | "signal" | "commit" | "locked" | "result";
 const DEMO_ROOM_ID = "DEMO-472";
@@ -55,9 +55,12 @@ function MockPlayerGame() {
     switchedCount: roundSummary.switchedCount,
     totalPlayers: roundSummary.results.length,
   }), [round, roundSummary.results.length, roundSummary.switchedCount]);
-  const switcherNames = useMemo(() => roundSummary.results
-    .filter((player) => player.signalPacketId !== player.secretPacketId)
-    .map((player) => player.id === "you" ? name || "你" : player.name), [name, roundSummary.results]);
+  const livePlayers = useMemo(() => roundSummary.results.map((player) => ({
+    id: player.id,
+    name: player.id === "you" ? name || "你" : player.name,
+    publicPacketId: player.signalPacketId,
+    secretPacketId: player.secretPacketId,
+  } satisfies LivePlayerChoice)), [name, roundSummary.results]);
   const visibleSwitchHistory = step === "result"
     ? upsertRoundSwitch(switchHistory, currentSwitchSummary)
     : switchHistory;
@@ -138,7 +141,7 @@ function MockPlayerGame() {
           <p>#472 · R{String(round).padStart(2, "0")}</p>
         </header>
         <PlayerIntelligencePanel profiles={playerProfiles} balanceLabel={`${formatEther(mockBalanceWei)} MON`} roundProfitLabel={roundProfitWei === null ? "—" : `${roundProfitWei > 0n ? "+" : ""}${formatEther(roundProfitWei)} MON`} roundProfitTone={roundProfitWei === null ? "neutral" : roundProfitWei > 0n ? "positive" : roundProfitWei < 0n ? "negative" : "neutral"} currentRound={round} />
-        <RoundLiveStatus roundNumber={round} counts={roundSummary.finalCounts} mode="secret" switchedCount={roundSummary.switchedCount} switchers={switcherNames} revealedCount={8} totalPlayers={8} />
+        <RoundLiveStatus roundNumber={round} counts={roundSummary.finalCounts} mode="secret" switchedCount={roundSummary.switchedCount} players={livePlayers} revealedCount={8} totalPlayers={8} />
         <RoundSwitchHistory items={visibleSwitchHistory} currentRound={round} />
         <PlayerFlowRail current="result" />
         <section className="player-panel settlement-panel">
@@ -200,7 +203,7 @@ function MockPlayerGame() {
         <p>#472 · R{String(round).padStart(2, "0")}</p>
       </header>
       <PlayerIntelligencePanel profiles={playerProfiles} balanceLabel={`${formatEther(mockBalanceWei)} MON`} roundProfitLabel={stakeIsLocked ? "待结算" : "—"} currentRound={round} />
-      <RoundLiveStatus roundNumber={round} counts={publicCounts} mode={step === "join" || step === "signal" ? "waiting" : "public"} totalPlayers={8} />
+      <RoundLiveStatus roundNumber={round} counts={publicCounts} mode={step === "join" || step === "signal" ? "waiting" : "public"} players={livePlayers} totalPlayers={8} />
       <RoundSwitchHistory items={switchHistory} currentRound={round} />
       <PlayerFlowRail current={flowStep} />
 

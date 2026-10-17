@@ -4,9 +4,16 @@ import { ArrowRight, Check, Radio, X } from "lucide-react";
 
 import { PACKETS, type PacketId } from "@/lib/game-config";
 import type { RoundSwitchSummary } from "@/lib/round-switch-history";
+import { PlayerAvatar } from "@/components/player-avatar";
 
 export type PlayerFlowStep = "join" | "signal" | "commit" | "reveal" | "result";
 export type ResultDetailView = "trail" | "distribution" | "ledger";
+export type LivePlayerChoice = Readonly<{
+  id: string;
+  name: string;
+  publicPacketId: PacketId | null;
+  secretPacketId: PacketId | null;
+}>;
 
 const FLOW_STEPS: readonly { id: PlayerFlowStep; label: string; short: string }[] = [
   { id: "join", label: "进入房间", short: "入场" },
@@ -43,7 +50,7 @@ export function RoundLiveStatus({
   counts,
   mode,
   switchedCount,
-  switchers = [],
+  players = [],
   revealedCount,
   totalPlayers,
   compact = false,
@@ -52,12 +59,13 @@ export function RoundLiveStatus({
   counts: readonly number[];
   mode: "waiting" | "public" | "secret";
   switchedCount?: number;
-  switchers?: readonly string[];
+  players?: readonly LivePlayerChoice[];
   revealedCount?: number;
   totalPlayers: number;
   compact?: boolean;
 }) {
   const highestCount = mode === "waiting" ? 0 : Math.max(0, ...counts);
+  const switchers = players.filter((player) => player.publicPacketId !== null && player.secretPacketId !== null && player.publicPacketId !== player.secretPacketId);
   const status = mode === "secret"
     ? revealedCount !== undefined && revealedCount < totalPlayers
       ? `真实分组揭晓中 · ${revealedCount}/${totalPlayers}`
@@ -75,10 +83,14 @@ export function RoundLiveStatus({
       <div className="round-live-status__packets">
         {PACKETS.map((packet) => {
           const isTop = highestCount > 0 && (counts[packet.id] ?? 0) === highestCount;
+          const packetPlayers = mode === "waiting" ? [] : players.filter((player) => (mode === "secret" ? player.secretPacketId : player.publicPacketId) === packet.id);
           return <div className={isTop ? "is-top" : ""} key={packet.id} style={{ "--packet-color": packet.color, "--packet-ink": packet.ink } as React.CSSProperties}>
             <i />
             <span>{packet.name}</span>
             <strong>{mode === "waiting" ? "—" : counts[packet.id] ?? 0}{mode === "waiting" ? null : <small>人</small>}</strong>
+            {packetPlayers.length > 0 && <div className="round-live-status__player-avatars" aria-label={`${packet.name}：${packetPlayers.map((player) => player.name).join("、")}`}>
+              {packetPlayers.map((player) => <span key={player.id} title={player.name}><PlayerAvatar id={player.id} name={player.name} background={packet.color} /></span>)}
+            </div>}
             {isTop && <em>TOP</em>}
           </div>;
         })}
@@ -88,7 +100,10 @@ export function RoundLiveStatus({
           <span>当前轮次</span>
           <div className="round-live-status__switchers">
             <strong>{switchedCount ?? 0} 人反水</strong>
-            {switchers.length > 0 && <p aria-label="本轮反水玩家">{switchers.map((switcher) => <i key={switcher}>{switcher}</i>)}</p>}
+            {switchers.length > 0 && <p aria-label="本轮反水玩家">{switchers.map((player) => {
+              const packet = PACKETS[player.secretPacketId ?? player.publicPacketId ?? 0];
+              return <span key={player.id} title={`${player.name}：${PACKETS[player.publicPacketId ?? 0].name} → ${packet.name}`}><PlayerAvatar id={player.id} name={player.name} background={packet.color} /><i>{player.name}</i></span>;
+            })}</p>}
           </div>
         </> : mode === "waiting" ? <><span>人数已锁定</span><strong>先完成你的提交</strong></> : <><span>秘密结果</span><strong>揭晓后公布反水人数与玩家</strong></>}
       </div>

@@ -6,6 +6,7 @@ import { formatEther } from "viem";
 
 import { PACKETS } from "@/lib/game-config";
 import type { PlayerIntelProfile } from "@/lib/player-intelligence";
+import { PlayerAvatar } from "@/components/player-avatar";
 
 type ProfitTone = "positive" | "negative" | "neutral";
 
@@ -66,7 +67,7 @@ export function PlayerIntelligencePanel({
                 style={{ "--preference-color": packet.color, "--preference-ink": packet.ink } as React.CSSProperties}
                 aria-pressed={profile.id === selected.id}
               >
-                <i>{profile.displayName.slice(0, 1).toUpperCase()}</i>
+                <PlayerAvatar id={profile.id} name={profile.displayName} background={packet.color} />
                 <span><strong>{profile.displayName}{profile.isSelf ? " · 你" : ""}</strong><small>偏好 {packet.name}</small></span>
                 {switched && <em>反水</em>}
               </button>
@@ -77,7 +78,10 @@ export function PlayerIntelligencePanel({
         <div className="player-scout-detail" style={{ "--preference-color": preference.color, "--preference-ink": preference.ink } as React.CSSProperties}>
           <button className="player-scout-detail__close" type="button" aria-label="关闭选手详情" onClick={() => setDetailOpen(false)}><X size={16} /></button>
           <div className="player-scout-detail__head">
-            <div><span>PLAYER FILE</span><strong>{selected.displayName}</strong></div>
+            <div className="player-scout-detail__identity">
+              <PlayerAvatar id={selected.id} name={selected.displayName} background={preference.color} />
+              <div><span>PLAYER FILE</span><strong>{selected.displayName}</strong></div>
+            </div>
             <p><i />偏好颜色 · {preference.name}</p>
           </div>
           <div className="player-round-ledger">
