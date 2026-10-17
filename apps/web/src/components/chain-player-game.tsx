@@ -17,12 +17,16 @@ import {
   explorerTransactionUrl,
   humanizeWalletError,
   metaMaskMobileUrl,
+  readWalletBalance,
   shortAddress,
 } from "@/lib/injected-wallet";
 import type { ChainGameSnapshot, ChainPlayer, TransactionProgress } from "@/lib/onchain-game-gateway";
 import { monadTestnet } from "@/lib/chain";
 import { persistChainRoundHistory } from "@/lib/persist-chain-history";
+import { buildPlayerIntelProfiles, loadRoomPlayerHistory, type PlayerIntelRound } from "@/lib/player-intelligence";
+import type { PlayerHistoryRecord } from "@/lib/player-history";
 import { loadRoundSwitches, upsertRoundSwitch, type RoundSwitchSummary } from "@/lib/round-switch-history";
+import { PlayerIntelligencePanel } from "@/components/player-intelligence-panel";
 import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, RoundLiveStatus, RoundSwitchHistory, StakeAmountPicker, type PlayerFlowStep } from "@/components/player-flow-ui";
 
 const vault = new CommitVault();
@@ -41,7 +45,12 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
   const [tx, setTx] = useState<TransactionProgress | null>(null);
   const [mobileWalletUrl, setMobileWalletUrl] = useState("");
   const [claimableAmount, setClaimableAmount] = useState(0n);
+  const [walletBalance, setWalletBalance] = useState<string | null>(null);
   const [switchHistory, setSwitchHistory] = useState<readonly RoundSwitchSummary[]>([]);
+  const [historyRecords, setHistoryRecords] = useState<readonly PlayerHistoryRecord[]>([]);
+  const historyRoomId = useMemo(() => contractAddress && gameId !== null
+    ? `MONAD-10143:${contractAddress.toLowerCase()}:${gameId.toString()}`
+    : null, [contractAddress, gameId]);
 
   useEffect(() => {
     setMobileWalletUrl(metaMaskMobileUrl(window.location.href));
@@ -56,17 +65,26 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
   }, [searchParams]);
 
   useEffect(() => {
-    if (!contractAddress || gameId === null) return;
-    const roomId = `MONAD-10143:${contractAddress.toLowerCase()}:${gameId.toString()}`;
-    void loadRoundSwitches(roomId, "onchain").then(setSwitchHistory).catch(() => undefined);
-  }, [contractAddress, gameId]);
+    if (!historyRoomId) return;
+    void Promise.all([
+      loadRoundSwitches(historyRoomId, "onchain"),
+      loadRoomPlayerHistory(historyRoomId, "onchain"),
+    ]).then(([switches, records]) => {
+      setSwitchHistory(switches);
+      setHistoryRecords(records);
+    }).catch(() => undefined);
+  }, [historyRoomId]);
 
   const refresh = useCallback(async () => {
     if (!contractAddress || gameId === null) return;
     const gateway = await createOnchainGateway(contractAddress);
     const next = await gateway.readSnapshot(gameId);
     setSnapshot(next);
-    void persistChainRoundHistory(contractAddress, gameId, next).catch(() => undefined);
+    void persistChainRoundHistory(contractAddress, gameId, next).then((saved) => {
+      if (!saved) return;
+      const roomId = `MONAD-10143:${contractAddress.toLowerCase()}:${gameId.toString()}`;
+      return loadRoomPlayerHistory(roomId, "onchain").then(setHistoryRecords);
+    }).catch(() => undefined);
     if (next.phase === "settled" || next.phase === "cancelled") {
       const revealed = next.players.filter((player) => player.revealed);
       const summary = {
@@ -77,7 +95,12 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
       setSwitchHistory((current) => upsertRoundSwitch(current, summary));
     }
     if (account) {
-      setClaimableAmount(await gateway.readClaimable(gameId, account));
+      const [nextClaimable, nextBalance] = await Promise.all([
+        gateway.readClaimable(gameId, account),
+        readWalletBalance(account),
+      ]);
+      setClaimableAmount(nextClaimable);
+      setWalletBalance(nextBalance);
       const own = next.players.find((player) => player.address.toLowerCase() === account.toLowerCase());
       if (own?.hasSignaled) setSignalPacket(own.signalPacket as PacketId);
       else setSignalPacket(null);
@@ -95,6 +118,26 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
   }, [contractAddress, gameId, refresh]);
 
   const ownAction = useMemo(() => snapshot?.players.find((player) => account && player.address.toLowerCase() === account.toLowerCase()) ?? null, [account, snapshot]);
+  const currentIntelRounds = useMemo(() => snapshot && (snapshot.phase === "settled" || snapshot.phase === "cancelled")
+    ? chainIntelRounds(snapshot)
+    : {}, [snapshot]);
+  const playerProfiles = useMemo(() => buildPlayerIntelProfiles(
+    historyRecords,
+    (snapshot?.players ?? []).map((player, index) => ({
+      id: player.address.toLowerCase(),
+      displayName: shortAddress(player.address),
+      isSelf: Boolean(account && player.address.toLowerCase() === account.toLowerCase()),
+      fallbackPreferencePacketId: player.revealed
+        ? player.revealedPacket as PacketId
+        : player.hasSignaled
+          ? player.signalPacket as PacketId
+          : index % 4 as PacketId,
+    })),
+    currentIntelRounds,
+  ), [account, currentIntelRounds, historyRecords, snapshot?.players]);
+  const settledRoundProfit = snapshot && ownAction && (snapshot.phase === "settled" || snapshot.phase === "cancelled")
+    ? ownAction.payout - ownAction.stakeAmount
+    : null;
   const lobbyExpired = snapshot?.phase === "lobby" && snapshot.blockNumber >= snapshot.game.joinEndBlock;
 
   async function run(action: () => Promise<void>) {
@@ -113,6 +156,7 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
     await run(async () => {
       const next = await connectInjectedWallet();
       setAccount(next);
+      setWalletBalance(await readWalletBalance(next));
       setMessage(`已连接 ${shortAddress(next)}。每笔操作都需要 MetaMask 确认并自付 Gas。`);
     });
   }
@@ -193,6 +237,12 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
         <p>{message}</p>
         {tx?.hash && <a href={explorerTransactionUrl(tx.hash)} target="_blank" rel="noreferrer">{txLabel(tx)} <ExternalLink size={12} /></a>}
       </section>
+      {snapshot && <PlayerIntelligencePanel
+        profiles={playerProfiles}
+        balanceLabel={account ? walletBalance ? `${walletBalance} MON` : "读取中…" : "连接钱包后显示"}
+        roundProfitLabel={settledRoundProfit === null ? ownAction?.joined ? "待结算" : "—" : `${settledRoundProfit > 0n ? "+" : ""}${formatEther(settledRoundProfit)} MON`}
+        roundProfitTone={settledRoundProfit === null ? "neutral" : settledRoundProfit > 0n ? "positive" : settledRoundProfit < 0n ? "negative" : "neutral"}
+      />}
       {snapshot && liveStatus && <RoundLiveStatus roundNumber={snapshot.game.roundNumber} counts={liveStatus.counts} mode={liveStatus.mode} switchedCount={liveStatus.switchedCount} revealedCount={liveStatus.revealedCount} totalPlayers={snapshot.game.playerCount} />}
       {snapshot && <RoundSwitchHistory items={switchHistory} currentRound={snapshot.game.roundNumber} />}
       <PlayerFlowRail current={playerFlowStep(snapshot, ownAction, Boolean(account))} />
@@ -283,6 +333,21 @@ function Settlement({ snapshot, ownAction, claimableAmount, busy, onClaim, onNex
       </div>
     </section>
   );
+}
+
+function chainIntelRounds(snapshot: ChainGameSnapshot): Record<string, PlayerIntelRound> {
+  const isRefund = snapshot.phase === "cancelled" || snapshot.game.winnerPacket >= PACKETS.length;
+  return Object.fromEntries(snapshot.players.map((player) => {
+    const won = !isRefund && player.revealed && player.revealedPacket === snapshot.game.winnerPacket;
+    return [player.address.toLowerCase(), {
+      round: Number(snapshot.game.roundNumber),
+      publicPacketId: player.hasSignaled ? player.signalPacket as PacketId : null,
+      secretPacketId: player.revealed ? player.revealedPacket as PacketId : null,
+      stakeWei: player.stakeAmount,
+      payoutWei: player.payout,
+      outcome: isRefund ? "refunded" : won ? "won" : "lost",
+    } satisfies PlayerIntelRound];
+  }));
 }
 
 function behavior(player: ChainPlayer) {

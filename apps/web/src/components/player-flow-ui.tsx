@@ -66,7 +66,7 @@ export function RoundLiveStatus({
     <section className={`round-live-status is-${mode}${compact ? " is-compact" : ""}`} aria-label={`第 ${roundNumber.toString()} 轮实时状态`}>
       <div className="round-live-status__head">
         <p><Radio size={13} /> LIVE · ROUND {roundNumber.toString().padStart(2, "0")}</p>
-        <div><span>总人数 <b>{totalPlayers}</b></span><strong>{status}</strong></div>
+        <div><span>当前人数 <b>{totalPlayers}</b><small>人</small></span><strong>{status}</strong></div>
       </div>
       <div className="round-live-status__packets">
         {PACKETS.map((packet) => (

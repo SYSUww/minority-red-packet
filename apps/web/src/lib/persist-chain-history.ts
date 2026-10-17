@@ -10,10 +10,10 @@ export async function persistChainRoundHistory(
   gameId: bigint,
   snapshot: ChainGameSnapshot,
 ) {
-  if (snapshot.phase !== "settled" && snapshot.phase !== "cancelled") return;
+  if (snapshot.phase !== "settled" && snapshot.phase !== "cancelled") return false;
   const roundNumber = Number(snapshot.game.roundNumber);
   const roundId = `monad-10143:${contractAddress.toLowerCase()}:${gameId.toString()}:round-${roundNumber}`;
-  if (persistedRounds.has(roundId)) return;
+  if (persistedRounds.has(roundId)) return false;
   persistedRounds.add(roundId);
 
   const winningPacketId = snapshot.game.winnerPacket < 4
@@ -60,6 +60,7 @@ export async function persistChainRoundHistory(
       body: JSON.stringify({ records }),
     });
     if (!response.ok) throw new Error(`history API returned ${response.status}`);
+    return true;
   } catch (error) {
     persistedRounds.delete(roundId);
     throw error;
