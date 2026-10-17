@@ -11,9 +11,9 @@ import type { PlayerHistoryRecord } from "@/lib/player-history";
 import { loadRoundSwitches, upsertRoundSwitch, type RoundSwitchSummary } from "@/lib/round-switch-history";
 import { ChainPlayerGame } from "@/components/chain-player-game";
 import { PlayerIntelligencePanel } from "@/components/player-intelligence-panel";
-import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, RoundLiveStatus, RoundSwitchHistory, StakeAmountPicker, type PlayerFlowStep } from "@/components/player-flow-ui";
+import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, ResultDetailSheet, RoundLiveStatus, RoundSwitchHistory, StakeAmountPicker, type PlayerFlowStep, type ResultDetailView } from "@/components/player-flow-ui";
 
-type PlayerStep = "join" | "signal" | "commit" | "locked" | "reveal" | "result";
+type PlayerStep = "join" | "signal" | "commit" | "locked" | "result";
 const DEMO_ROOM_ID = "DEMO-472";
 const MON = 10n ** 18n;
 const MOCK_STARTING_BALANCE = 100n * MON;
@@ -30,6 +30,7 @@ function MockPlayerGame() {
   const [secretPacket, setSecretPacket] = useState<PacketId | null>(null);
   const [stakeUnits, setStakeUnits] = useState(3);
   const [round, setRound] = useState(1);
+  const [resultDetailView, setResultDetailView] = useState<ResultDetailView | null>(null);
   const [switchHistory, setSwitchHistory] = useState<readonly RoundSwitchSummary[]>([]);
   const [historyRecords, setHistoryRecords] = useState<readonly PlayerHistoryRecord[]>([]);
 
@@ -75,7 +76,7 @@ function MockPlayerGame() {
   ), [currentIntelRounds, historyRecords, name, roundSummary.results, signalPacket]);
   const ownProfile = playerProfiles.find((profile) => profile.isSelf);
   const settledNetWei = ownProfile?.rounds.reduce((total, item) => total + item.payoutWei - item.stakeWei, 0n) ?? 0n;
-  const stakeIsLocked = step === "commit" || step === "locked" || step === "reveal";
+  const stakeIsLocked = step === "commit" || step === "locked";
   const mockBalanceWei = MOCK_STARTING_BALANCE + settledNetWei - (stakeIsLocked ? BigInt(stakeUnits) * MON : 0n);
   const ownCurrentRound = currentIntelRounds.you;
   const roundProfitWei = ownCurrentRound ? ownCurrentRound.payoutWei - ownCurrentRound.stakeWei : null;
@@ -122,19 +123,6 @@ function MockPlayerGame() {
     }).then(setHistoryRecords).catch(() => undefined);
   }, [name, round, roundSummary.finalCounts, roundSummary.results, roundSummary.winnerCount, roundSummary.winnerPacketId, step]);
 
-  if (step === "reveal" && chosenPacket) {
-    return (
-      <main className="phone-reveal" style={{ "--reveal-color": chosenPacket.color, "--reveal-ink": chosenPacket.ink } as React.CSSProperties}>
-        <RoundLiveStatus roundNumber={round} counts={roundSummary.finalCounts} mode="secret" switchedCount={roundSummary.switchedCount} switchers={switcherNames} revealedCount={8} totalPlayers={8} compact />
-        <p>第 {round} 轮 · 最终选择</p>
-        <span>{chosenPacket.name}</span>
-        <strong>0{chosenPacket.id + 1}<small> · 平票优先级 {chosenPacket.id + 1}</small></strong>
-        <div className="raise-phone">现在，举起手机</div>
-        <button onClick={() => setStep("result")}>查看结算结果</button>
-      </main>
-    );
-  }
-
   if (step === "result" && chosenPacket) {
     const ownResult = roundSummary.results.find((player) => player.id === "you");
     const won = ownResult?.won ?? false;
@@ -163,29 +151,40 @@ function MockPlayerGame() {
               <p><span>你的投入</span><strong>{stakeUnits} MON</strong></p>
             </div>
           </div>
-          <ChoiceTrail publicPacketId={signalPacket} secretPacketId={secretPacket} />
-          <PacketDistribution counts={roundSummary.finalCounts} winnerPacketId={roundSummary.winnerPacketId} />
-          <div className="result-section-title public-result-title"><div><span>演示账本</span><h2>每个人的真实提交</h2></div><p>与链上结果页一致</p></div>
-          <div className="public-results">
-            {roundSummary.results.map((player) => {
-              const switched = player.signalPacketId !== player.secretPacketId;
-              return <div className={player.id === "you" ? "is-self" : ""} key={player.id}>
-                <p><code>{player.id === "you" ? `${player.name}（你）` : player.name}</code><small>{formatEther(player.stakeWei)} MON</small></p>
-                <span>{PACKETS[player.signalPacketId].name} → {PACKETS[player.secretPacketId].name}</span>
-                <em>{player.won ? `${formatEther(player.payoutWei)} MON` : "—"}</em>
-                <strong className={`result-behavior is-${switched ? "switched" : "kept"}`}>{switched ? "反水" : "守约"}</strong>
-              </div>;
-            })}
-          </div>
           <div className="mock-result-note"><PartyPopper size={17} /><span>这是流程演示，不会产生真实资产领取。</span></div>
-          <button className="mobile-text" onClick={() => {
-            setSwitchHistory((current) => upsertRoundSwitch(current, currentSwitchSummary));
-            setStep("join");
-            setSignalPacket(null);
-            setSecretPacket(null);
-            setRound((current) => current + 1);
-          }}>进入第 {round + 1} 轮</button>
+          <div className="result-primary-actions">
+            <button className="result-detail-trigger" type="button" onClick={() => setResultDetailView("trail")}>查看本轮完整记录</button>
+            <button className="next-round-action" onClick={() => {
+              setSwitchHistory((current) => upsertRoundSwitch(current, currentSwitchSummary));
+              setResultDetailView(null);
+              setStep("join");
+              setSignalPacket(null);
+              setSecretPacket(null);
+              setRound((current) => current + 1);
+            }}>进入第 {round + 1} 轮</button>
+          </div>
           <p className="next-round-note">房间 #472 持续有效；下一轮重新选择投入和阵营。</p>
+          <ResultDetailSheet
+            active={resultDetailView}
+            onChange={setResultDetailView}
+            onClose={() => setResultDetailView(null)}
+            trail={<ChoiceTrail publicPacketId={signalPacket} secretPacketId={secretPacket} />}
+            distribution={<PacketDistribution counts={roundSummary.finalCounts} winnerPacketId={roundSummary.winnerPacketId} />}
+            ledger={<>
+              <div className="result-section-title public-result-title"><div><span>演示账本</span><h2>每个人的真实提交</h2></div><p>与链上结果页一致</p></div>
+              <div className="public-results">
+                {roundSummary.results.map((player) => {
+                  const switched = player.signalPacketId !== player.secretPacketId;
+                  return <div className={player.id === "you" ? "is-self" : ""} key={player.id}>
+                    <p><code>{player.id === "you" ? `${player.name}（你）` : player.name}</code><small>{formatEther(player.stakeWei)} MON</small></p>
+                    <span>{PACKETS[player.signalPacketId].name} → {PACKETS[player.secretPacketId].name}</span>
+                    <em>{player.won ? `${formatEther(player.payoutWei)} MON` : "—"}</em>
+                    <strong className={`result-behavior is-${switched ? "switched" : "kept"}`}>{switched ? "反水" : "守约"}</strong>
+                  </div>;
+                })}
+              </div>
+            </>}
+          />
         </section>
       </main>
     );
@@ -194,7 +193,7 @@ function MockPlayerGame() {
   const flowStep: PlayerFlowStep = step === "locked" ? "reveal" : step;
 
   return (
-    <main className="player-shell">
+    <main className="player-shell active-round-shell">
       <header className="player-header">
         <Link href="/" aria-label="返回首页"><ArrowLeft size={19} /></Link>
         <span className="mode-tag">本地演示</span>
@@ -260,7 +259,7 @@ function MockPlayerGame() {
             <span><Check size={16} /> 选择哈希已最终确认</span>
             <span><Check size={16} /> 等待区块时间进入统一揭晓</span>
           </div>
-          <button className="mobile-primary" onClick={() => setStep("reveal")}>模拟统一揭晓</button>
+          <button className="mobile-primary" onClick={() => setStep("result")}>查看结算结果</button>
         </section>
       )}
     </main>

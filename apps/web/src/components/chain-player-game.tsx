@@ -27,7 +27,7 @@ import { buildPlayerIntelProfiles, loadRoomPlayerHistory, type PlayerIntelRound 
 import type { PlayerHistoryRecord } from "@/lib/player-history";
 import { loadRoundSwitches, upsertRoundSwitch, type RoundSwitchSummary } from "@/lib/round-switch-history";
 import { PlayerIntelligencePanel } from "@/components/player-intelligence-panel";
-import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, RoundLiveStatus, RoundSwitchHistory, StakeAmountPicker, type PlayerFlowStep } from "@/components/player-flow-ui";
+import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, ResultDetailSheet, RoundLiveStatus, RoundSwitchHistory, StakeAmountPicker, type PlayerFlowStep, type ResultDetailView } from "@/components/player-flow-ui";
 
 const vault = new CommitVault();
 
@@ -228,9 +228,10 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
   if (!contractAddress) return <PlayerError message="当前环境还没有配置统一协议地址。请先从房间二维码进入，或配置 NEXT_PUBLIC_CONTRACT_ADDRESS。" />;
 
   const liveStatus = snapshot ? chainLiveStatus(snapshot, ownAction) : null;
+  const chainFlowStep = playerFlowStep(snapshot, ownAction, Boolean(account));
 
   return (
-    <main className="player-shell chain-player">
+    <main className={`player-shell chain-player${chainFlowStep === "result" ? " result-shell" : " active-round-shell"}`}>
       <header className="player-header"><Link href="/" aria-label="返回首页"><ArrowLeft size={19} /></Link><span className="mode-tag chain-mode-tag">MetaMask 开发模式</span><p>#{gameId.toString()}{snapshot ? ` · R${snapshot.game.roundNumber.toString().padStart(2, "0")}` : ""}</p></header>
       <section className="chain-player-status">
         <span>{snapshot ? phaseLabel(snapshot.phase) : "读取链上状态"}</span>
@@ -246,7 +247,7 @@ export function ChainPlayerGame({ gameId: gameIdParam }: { gameId: string }) {
       />}
       {snapshot && liveStatus && <RoundLiveStatus roundNumber={snapshot.game.roundNumber} counts={liveStatus.counts} mode={liveStatus.mode} switchedCount={liveStatus.switchedCount} switchers={liveStatus.switchers} revealedCount={liveStatus.revealedCount} totalPlayers={snapshot.game.playerCount} />}
       {snapshot && <RoundSwitchHistory items={switchHistory} currentRound={snapshot.game.roundNumber} />}
-      <PlayerFlowRail current={playerFlowStep(snapshot, ownAction, Boolean(account))} />
+      <PlayerFlowRail current={chainFlowStep} />
       {account && claimableAmount > 0n && snapshot && snapshot.phase !== "settled" && snapshot.phase !== "cancelled" && <aside className="carryover-prize"><p><span>往轮待领取</span><strong>{formatEther(claimableAmount)} MON</strong></p><button onClick={claim} disabled={busy}>{busy ? "领取中…" : "领取"}</button></aside>}
 
       {!account ? <ConnectPanel busy={busy} gameId={gameId} mobileWalletUrl={mobileWalletUrl} onConnect={connect} snapshot={snapshot} /> : !snapshot ? <LoadingPanel /> : !ownAction?.joined ? (
@@ -286,6 +287,7 @@ function RevealCard({ player }: { player: ChainPlayer }) {
 }
 
 function Settlement({ snapshot, ownAction, claimableAmount, busy, onClaim, onNextRound }: { snapshot: ChainGameSnapshot; ownAction: ChainPlayer; claimableAmount: bigint; busy: boolean; onClaim: () => void; onNextRound: () => void }) {
+  const [resultDetailView, setResultDetailView] = useState<ResultDetailView | null>(null);
   const hasPayout = claimableAmount > 0n;
   const isRefund = snapshot.phase === "cancelled" || snapshot.game.winnerPacket >= PACKETS.length;
   const won = !isRefund && ownAction.revealed && ownAction.revealedPacket === snapshot.game.winnerPacket;
@@ -311,27 +313,36 @@ function Settlement({ snapshot, ownAction, claimableAmount, busy, onClaim, onNex
       </div>
 
       {hasPayout ? <button className="mobile-primary result-claim" onClick={onClaim} disabled={busy}>{busy ? "领取中…" : isRefund ? "取回全部待领取资金" : "领取到当前钱包"}</button> : <p className="claim-state"><Check size={15} />本轮没有待领取资金</p>}
-      <button className="next-round-action" onClick={onNextRound} disabled={busy}>{busy ? "等待链上确认…" : `开启第 ${Number(snapshot.game.roundNumber) + 1} 轮`}</button>
+      <div className="result-primary-actions">
+        <button className="result-detail-trigger" type="button" onClick={() => setResultDetailView("trail")}>查看本轮完整记录</button>
+        <button className="next-round-action" onClick={onNextRound} disabled={busy}>{busy ? "等待链上确认…" : `开启第 ${Number(snapshot.game.roundNumber) + 1} 轮`}</button>
+      </div>
       <p className="next-round-note">房间号保持不变；所有玩家下一轮重新选择投入和阵营。</p>
 
-      <ChoiceTrail publicPacketId={publicPacketId} secretPacketId={secretPacketId} />
-      <PacketDistribution counts={snapshot.revealedCounts} winnerPacketId={winnerPacketId} />
-
-      <div className="result-section-title public-result-title">
-        <div><span>公开账本</span><h2>每个人的真实提交</h2></div>
-        <p>公开战队 → 秘密战队</p>
-      </div>
-      <div className="public-results">
-        {snapshot.players.map((player) => {
-          const playerWon = winnerPacketId !== null && player.revealed && player.revealedPacket === winnerPacketId;
-          return <div className={player.address === ownAction.address ? "is-self" : ""} key={player.address}>
-            <p><code>{shortAddress(player.address)}</code><small>{formatEther(player.stakeAmount)} MON</small></p>
-            <span>{player.hasSignaled ? PACKETS[player.signalPacket as PacketId].name : "未站队"} → {player.revealed ? PACKETS[player.revealedPacket as PacketId].name : "未揭晓"}</span>
-            <em>{playerWon || isRefund ? `${formatEther(player.payout)} MON` : "—"}</em>
-            <strong className={`result-behavior is-${behavior(player)}`}>{behaviorLabel(player)}</strong>
-          </div>;
-        })}
-      </div>
+      <ResultDetailSheet
+        active={resultDetailView}
+        onChange={setResultDetailView}
+        onClose={() => setResultDetailView(null)}
+        trail={<ChoiceTrail publicPacketId={publicPacketId} secretPacketId={secretPacketId} />}
+        distribution={<PacketDistribution counts={snapshot.revealedCounts} winnerPacketId={winnerPacketId} />}
+        ledger={<>
+          <div className="result-section-title public-result-title">
+            <div><span>公开账本</span><h2>每个人的真实提交</h2></div>
+            <p>公开战队 → 秘密战队</p>
+          </div>
+          <div className="public-results">
+            {snapshot.players.map((player) => {
+              const playerWon = winnerPacketId !== null && player.revealed && player.revealedPacket === winnerPacketId;
+              return <div className={player.address === ownAction.address ? "is-self" : ""} key={player.address}>
+                <p><code>{shortAddress(player.address)}</code><small>{formatEther(player.stakeAmount)} MON</small></p>
+                <span>{player.hasSignaled ? PACKETS[player.signalPacket as PacketId].name : "未站队"} → {player.revealed ? PACKETS[player.revealedPacket as PacketId].name : "未揭晓"}</span>
+                <em>{playerWon || isRefund ? `${formatEther(player.payout)} MON` : "—"}</em>
+                <strong className={`result-behavior is-${behavior(player)}`}>{behaviorLabel(player)}</strong>
+              </div>;
+            })}
+          </div>
+        </>}
+      />
     </section>
   );
 }

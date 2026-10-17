@@ -1,11 +1,12 @@
 "use client";
 
-import { ArrowRight, Check, Radio } from "lucide-react";
+import { ArrowRight, Check, Radio, X } from "lucide-react";
 
 import { PACKETS, type PacketId } from "@/lib/game-config";
 import type { RoundSwitchSummary } from "@/lib/round-switch-history";
 
 export type PlayerFlowStep = "join" | "signal" | "commit" | "reveal" | "result";
+export type ResultDetailView = "trail" | "distribution" | "ledger";
 
 const FLOW_STEPS: readonly { id: PlayerFlowStep; label: string; short: string }[] = [
   { id: "join", label: "进入房间", short: "入场" },
@@ -193,6 +194,44 @@ export function PacketDistribution({ counts, winnerPacketId }: { counts: readonl
         })}
       </div>
     </section>
+  );
+}
+
+export function ResultDetailSheet({
+  active,
+  onChange,
+  onClose,
+  trail,
+  distribution,
+  ledger,
+}: {
+  active: ResultDetailView | null;
+  onChange: (view: ResultDetailView) => void;
+  onClose: () => void;
+  trail: React.ReactNode;
+  distribution: React.ReactNode;
+  ledger: React.ReactNode;
+}) {
+  if (active === null) return null;
+
+  return (
+    <div className="result-detail-layer">
+      <button className="result-detail-backdrop" type="button" onClick={onClose} aria-label="关闭本轮详情" />
+      <section className="result-detail-sheet" role="dialog" aria-modal="true" aria-label="本轮完整记录">
+        <header className="result-detail-sheet__head">
+          <div><span>ROUND FILE</span><strong>本轮完整记录</strong></div>
+          <button type="button" onClick={onClose} aria-label="关闭本轮详情"><X size={17} /></button>
+        </header>
+        <nav className="result-detail-tabs" aria-label="结果详情分类">
+          <button type="button" className={active === "trail" ? "is-active" : ""} onClick={() => onChange("trail")}>选择轨迹</button>
+          <button type="button" className={active === "distribution" ? "is-active" : ""} onClick={() => onChange("distribution")}>阵营分布</button>
+          <button type="button" className={active === "ledger" ? "is-active" : ""} onClick={() => onChange("ledger")}>玩家账本</button>
+        </nav>
+        <div className={`result-detail-content is-${active}`}>
+          {active === "trail" ? trail : active === "distribution" ? distribution : ledger}
+        </div>
+      </section>
+    </div>
   );
 }
 
