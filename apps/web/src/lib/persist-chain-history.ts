@@ -11,7 +11,8 @@ export async function persistChainRoundHistory(
   snapshot: ChainGameSnapshot,
 ) {
   if (snapshot.phase !== "settled" && snapshot.phase !== "cancelled") return;
-  const roundId = `monad-10143:${contractAddress.toLowerCase()}:${gameId.toString()}`;
+  const roundNumber = Number(snapshot.game.roundNumber);
+  const roundId = `monad-10143:${contractAddress.toLowerCase()}:${gameId.toString()}:round-${roundNumber}`;
   if (persistedRounds.has(roundId)) return;
   persistedRounds.add(roundId);
 
@@ -36,7 +37,7 @@ export async function persistChainRoundHistory(
       roundId,
       source: "onchain",
       roomId: `MONAD-10143:${contractAddress.toLowerCase()}:${gameId.toString()}`,
-      round: 1,
+      round: roundNumber,
       playerId: player.address.toLowerCase(),
       displayName: player.address,
       isMock: false,

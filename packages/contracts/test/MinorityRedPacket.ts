@@ -173,7 +173,7 @@ describe("MinorityRedPacket", async function () {
     assert.equal(game.winningStake, 3n * STAKE);
     assert.equal(game.losingPot, 5n * STAKE);
     assert.equal(game.remainder, 2n);
-    assert.equal(game.outstandingPrize, 8n * STAKE);
+    assert.equal((await contract.read.getRoom([GAME_ID])).outstandingPrize, 8n * STAKE);
     assert.deepEqual(await contract.read.getRevealedCounts([GAME_ID]), [4, 3, 0, 0]);
 
     const payouts = await Promise.all(
@@ -256,7 +256,7 @@ describe("MinorityRedPacket", async function () {
     const game = await contract.read.getGame([GAME_ID]);
     assert.equal(game.winnerPacket, 255);
     assert.equal(game.winnerCount, 0);
-    assert.equal(game.outstandingPrize, 4n * STAKE);
+    assert.equal((await contract.read.getRoom([GAME_ID])).outstandingPrize, 4n * STAKE);
 
     const action = await contract.read.getPlayerAction([
       GAME_ID,
@@ -301,8 +301,10 @@ describe("MinorityRedPacket", async function () {
     assert.equal(await publicClient.getBalance({ address: expired.contract.address }), 0n);
   });
 
-  it("keeps commitments domain-separated by chain, contract, game, and player", async function () {
+  it("keeps commitments domain-separated by chain, contract, room, round, and player", async function () {
     const { contract, wallets } = await deploy();
+    await contract.write.createGame([100n]);
+    await contract.write.createGame([100n]);
     const salt = toHex(123456, { size: 32 });
     const typehash = await contract.read.COMMIT_TYPEHASH();
     const chainId = await publicClient.getChainId();
@@ -311,9 +313,9 @@ describe("MinorityRedPacket", async function () {
     const expected = keccak256(
       encodeAbiParameters(
         parseAbiParameters(
-          "bytes32 typehash, uint256 chainId, address verifyingContract, uint256 gameId, address player, uint8 packetId, bytes32 salt",
+          "bytes32 typehash, uint256 chainId, address verifyingContract, uint256 gameId, uint64 roundNumber, address player, uint8 packetId, bytes32 salt",
         ),
-        [typehash, BigInt(chainId), contract.address, GAME_ID, player, 2, salt],
+        [typehash, BigInt(chainId), contract.address, GAME_ID, 1n, player, 2, salt],
       ),
     );
 
@@ -374,5 +376,43 @@ describe("MinorityRedPacket", async function () {
     await mineTo(game.revealEndBlock);
     assert.equal(await contract.read.phase([GAME_ID]), 4);
     await assert.rejects(playerContracts[0].write.revealChoice([GAME_ID, 1, salt]));
+  });
+
+  it("keeps one room alive across rounds while preserving prior payouts and history", async function () {
+    const { contract, players, playerContracts } = await createStartedGame(4);
+    await playThroughReveal(contract, players, playerContracts, [0, 0, 1, 2]);
+    await contract.write.settle([GAME_ID]);
+
+    const firstRoundWinner = await contract.read.getPlayerAction([
+      GAME_ID,
+      players[3].account.address,
+    ]);
+    assert.equal(firstRoundWinner.payout, 4n * STAKE);
+    assert.equal(await contract.read.getCurrentRound([GAME_ID]), 1n);
+
+    await contract.write.openNextRound([GAME_ID, 100n]);
+
+    assert.equal(await contract.read.getCurrentRound([GAME_ID]), 2n);
+    assert.equal(await contract.read.phase([GAME_ID]), 0);
+    assert.deepEqual(await contract.read.getPlayers([GAME_ID]), []);
+    assert.equal((await contract.read.getRound([GAME_ID, 1n])).settled, true);
+    assert.equal((await contract.read.getRoundPlayers([GAME_ID, 1n])).length, 4);
+    assert.equal(
+      (await contract.read.getRoundPlayerAction([GAME_ID, 1n, players[3].account.address])).payout,
+      4n * STAKE,
+    );
+
+    await playerContracts[3].write.claim([GAME_ID, players[3].account.address]);
+    assert.equal(await contract.read.claimable([GAME_ID, players[3].account.address]), 0n);
+    assert.equal((await contract.read.getRoom([GAME_ID])).outstandingPrize, 0n);
+
+    await playerContracts[3].write.joinGame([GAME_ID], { value: 2n * STAKE });
+    const secondRoundAction = await contract.read.getPlayerAction([
+      GAME_ID,
+      players[3].account.address,
+    ]);
+    assert.equal(secondRoundAction.joined, true);
+    assert.equal(secondRoundAction.stakeAmount, 2n * STAKE);
+    assert.equal(secondRoundAction.payout, 0n);
   });
 });

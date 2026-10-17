@@ -18,6 +18,7 @@ export type TransactionState = "awaiting-signature" | "submitted" | "included" |
 export type TransactionProgress = Readonly<{ hash?: Hash; state: TransactionState }>;
 
 export type ChainGame = Readonly<{
+  roundNumber: bigint;
   joinEndBlock: bigint;
   startBlock: bigint;
   signalEndBlock: bigint;
@@ -33,7 +34,6 @@ export type ChainGame = Readonly<{
   winningStake: bigint;
   losingPot: bigint;
   remainder: bigint;
-  outstandingPrize: bigint;
 }>;
 
 export type ChainPlayer = Readonly<{
@@ -45,7 +45,6 @@ export type ChainPlayer = Readonly<{
   joined: boolean;
   hasSignaled: boolean;
   revealed: boolean;
-  claimed: boolean;
   payout: bigint;
 }>;
 
@@ -88,6 +87,10 @@ export class OnchainGameGateway {
     return this.send("joinGame", [gameId], stakeAmount, onProgress);
   }
 
+  async openNextRound(gameId: bigint, lobbyBlocks: bigint, onProgress?: ProgressListener) {
+    return this.send("openNextRound", [gameId, lobbyBlocks], undefined, onProgress);
+  }
+
   async expire(gameId: bigint, onProgress?: ProgressListener) {
     return this.send("expireGame", [gameId], undefined, onProgress);
   }
@@ -110,6 +113,15 @@ export class OnchainGameGateway {
 
   async claim(gameId: bigint, recipient: Address = this.playerAddress, onProgress?: ProgressListener) {
     return this.send("claim", [gameId, recipient], undefined, onProgress);
+  }
+
+  async readClaimable(gameId: bigint, player: Address) {
+    return this.publicClient.readContract({
+      address: this.address,
+      abi: minorityRedPacketAbi,
+      functionName: "claimable",
+      args: [gameId, player],
+    });
   }
 
   async readPlayer(gameId: bigint, player: Address): Promise<ChainPlayer> {
@@ -148,7 +160,7 @@ export class OnchainGameGateway {
   }
 
   private async send(
-    functionName: "createGame" | "joinGame" | "expireGame" | "signalChoice" | "commitChoice" | "revealChoice" | "settle" | "claim",
+    functionName: "createGame" | "openNextRound" | "joinGame" | "expireGame" | "signalChoice" | "commitChoice" | "revealChoice" | "settle" | "claim",
     args: readonly unknown[],
     value?: bigint,
     onProgress?: ProgressListener,

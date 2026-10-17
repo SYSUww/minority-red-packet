@@ -24,6 +24,17 @@ function clients(balance = 100n) {
 }
 
 describe("OnchainGameGateway payment preflight", () => {
+  it("opens the next round in the same room", async () => {
+    const { publicClient, walletClient } = clients();
+    const gateway = new OnchainGameGateway(CONTRACT, publicClient as never, walletClient as never);
+
+    await gateway.openNextRound(1n, 100n);
+
+    expect(walletClient.writeContract).toHaveBeenCalledWith(
+      expect.objectContaining({ functionName: "openNextRound", args: [1n, 100n] }),
+    );
+  });
+
   it("checks balance, estimates gas, simulates, then sends the payable join", async () => {
     const { publicClient, walletClient } = clients();
     const gateway = new OnchainGameGateway(CONTRACT, publicClient as never, walletClient as never);

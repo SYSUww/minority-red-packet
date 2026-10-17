@@ -8,7 +8,7 @@ export const PACKETS = [
 export type PacketId = (typeof PACKETS)[number]["id"];
 
 export const PHASES = [
-  { key: "signal", label: "公开站队", note: "让所有人看到你的意图" },
+  { key: "signal", label: "站队并投入", note: "同屏确认公开意图与本轮筹码" },
   { key: "commit", label: "秘密锁定", note: "答案变成不可读的承诺" },
   { key: "reveal", label: "同时揭晓", note: "举起手机，颜色即答案" },
   { key: "settle", label: "少数获胜", note: "按赢家投入权重分配" },

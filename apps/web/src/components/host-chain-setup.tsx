@@ -21,6 +21,7 @@ import {
 } from "@/lib/injected-wallet";
 import type { ChainGameSnapshot, TransactionProgress } from "@/lib/onchain-game-gateway";
 import { persistChainRoundHistory } from "@/lib/persist-chain-history";
+import { PlayerFlowRail, type PlayerFlowStep } from "@/components/player-flow-ui";
 
 const PHASE_LABELS = ["等待加入", "公开站队", "秘密锁定", "同时揭晓", "等待结算", "结算完成", "已取消"];
 
@@ -138,6 +139,9 @@ export function ChainHostConsole() {
       } else if (snapshot.phase === "awaiting-settlement") {
         await gateway.settle(gameId, setTx);
         setMessage("结算已最终确认，赢家现在可以领取。");
+      } else if (snapshot.phase === "settled" || snapshot.phase === "cancelled") {
+        await gateway.openNextRound(gameId, DEFAULT_LOBBY_BLOCKS, setTx);
+        setMessage(`房间 #${gameId.toString()} 已进入下一轮，玩家需要重新投入并加入。`);
       }
       await refresh();
     });
@@ -152,15 +156,15 @@ export function ChainHostConsole() {
   }, [contractAddress, gameId]);
 
   const lobbyExpired = snapshot?.phase === "lobby" && snapshot.blockNumber >= snapshot.game.joinEndBlock;
-  const canControl = Boolean(account && (lobbyExpired || snapshot?.phase === "awaiting-settlement"));
-  const controlLabel = lobbyExpired ? "退还全部押金" : snapshot?.phase === "awaiting-settlement" ? "任何人可结算" : "阶段自动流转";
+  const canControl = Boolean(account && (lobbyExpired || snapshot?.phase === "awaiting-settlement" || snapshot?.phase === "settled" || snapshot?.phase === "cancelled"));
+  const controlLabel = lobbyExpired ? "退还全部押金" : snapshot?.phase === "awaiting-settlement" ? "任何人可结算" : snapshot?.phase === "settled" || snapshot?.phase === "cancelled" ? `开启第 ${Number(snapshot.game.roundNumber) + 1} 轮` : "阶段自动流转";
 
   return (
     <div className="host-console chain-console">
       <header className="console-header">
         <div>
           <Link href="/" className="back-link"><ArrowLeft size={16} /> 返回首页</Link>
-          <h1>少数派红包 <span>{gameId === null ? "链上房间大厅" : `房间 #${gameId}`}</span></h1>
+          <h1>少数派红包 <span>{gameId === null ? "链上房间大厅" : `房间 #${gameId}${snapshot ? ` · R${snapshot.game.roundNumber.toString().padStart(2, "0")}` : ""}`}</span></h1>
         </div>
         <div className="console-meta">
           <span className="mode-tag chain-mode-tag">MetaMask 开发模式</span>
@@ -190,9 +194,10 @@ export function ChainHostConsole() {
       {snapshot ? (
         <section className="console-stage">
           <div className="console-titlebar">
-            <div><p className="eyebrow">{PHASE_LABELS[snapshot.phaseIndex]} · GAME #{gameId?.toString()}</p><h2>{phaseTitle(snapshot)}</h2></div>
+            <div><p className="eyebrow">{PHASE_LABELS[snapshot.phaseIndex]} · ROOM #{gameId?.toString()} · ROUND {snapshot.game.roundNumber.toString()}</p><h2>{phaseTitle(snapshot)}</h2></div>
             <div className="block-clock"><strong>{snapshot.game.playerCount} / 8</strong><span>已付费加入</span></div>
           </div>
+          <PlayerFlowRail current={hostFlowStep(snapshot)} dark />
           {snapshot.phase === "lobby" && joinUrl && gameId !== null ? <ChainLobby account={account} busy={busy} gameId={gameId} joinUrl={joinUrl} snapshot={snapshot} /> : <ChainBoard snapshot={snapshot} />}
         </section>
       ) : (
@@ -251,15 +256,24 @@ function ChainLobby({ account, busy, gameId, joinUrl, snapshot }: { account: Add
 
 function ChainBoard({ snapshot }: { snapshot: ChainGameSnapshot }) {
   const showReveal = snapshot.phase === "reveal" || snapshot.phase === "awaiting-settlement" || snapshot.phase === "settled";
-  return <div className="chain-board-wrap"><div className={`host-packet-grid phase-${snapshot.phase}`}>{PACKETS.map((packet) => {
+  const winnerPacket = snapshot.phase === "settled" && snapshot.game.winnerPacket < PACKETS.length ? PACKETS[snapshot.game.winnerPacket] : null;
+  return <div className="chain-board-wrap">{snapshot.phase === "settled" && <div className="host-result-summary" style={winnerPacket ? { "--result-color": winnerPacket.color, "--result-ink": winnerPacket.ink } as React.CSSProperties : undefined}><p><span>FINAL RESULT</span><strong>{winnerPacket ? `${winnerPacket.name}成为本轮少数派` : "本轮没有形成少数派"}</strong></p><div><span>赢家</span><strong>{snapshot.game.winnerCount} 人</strong><span>总资金池</span><strong>{formatEther(snapshot.game.pot)} MON</strong><span>败者资金</span><strong>{formatEther(snapshot.game.losingPot)} MON</strong></div></div>}<div className={`host-packet-grid phase-${snapshot.phase}`}>{PACKETS.map((packet) => {
     const grouped = snapshot.players.filter((player) => showReveal ? player.revealed && player.revealedPacket === packet.id : player.hasSignaled && player.signalPacket === packet.id);
     const winner = snapshot.phase === "settled" && snapshot.game.winnerPacket === packet.id;
     const groupedStake = grouped.reduce((total, player) => total + player.stakeAmount, 0n);
     return <article className={winner ? "host-packet is-winner" : "host-packet"} key={packet.id} style={{ "--packet-color": packet.color, "--packet-ink": packet.ink } as React.CSSProperties}>{winner && <span className="winner-ribbon">少数派</span>}<div className="host-packet__head"><span>{packet.name}</span><small>0{packet.id + 1}</small></div><strong>0{packet.id + 1}</strong><em>平票优先级 {packet.id + 1}</em><div className="host-player-list">{grouped.map((player) => <span key={player.address}>{shortAddress(player.address).slice(2, 4)}<small>{formatEther(player.stakeAmount)} MON</small></span>)}</div><p>{grouped.length} 人 · {formatEther(groupedStake)} MON</p></article>;
   })}</div>{snapshot.phase === "settled" && <div className="host-public-results">{snapshot.players.map((player) => {
     const status = !player.revealed ? "弃权" : player.hasSignaled && player.signalPacket === player.revealedPacket ? "守约" : "反水";
-    return <div key={player.address}><code>{shortAddress(player.address)} · {formatEther(player.stakeAmount)} MON</code><span>{player.hasSignaled ? PACKETS[player.signalPacket as 0 | 1 | 2 | 3].name : "未站队"} → {player.revealed ? PACKETS[player.revealedPacket as 0 | 1 | 2 | 3].name : "未揭晓"}</span><strong data-status={status}>{status}</strong></div>;
+    return <div key={player.address}><code>{shortAddress(player.address)} · 投入 {formatEther(player.stakeAmount)}</code><span>{player.hasSignaled ? PACKETS[player.signalPacket as 0 | 1 | 2 | 3].name : "未站队"} → {player.revealed ? PACKETS[player.revealedPacket as 0 | 1 | 2 | 3].name : "未揭晓"}</span><em>{player.payout > 0n ? `领取 ${formatEther(player.payout)}` : "—"}</em><strong data-status={status}>{status}</strong></div>;
   })}</div>}</div>;
+}
+
+function hostFlowStep(snapshot: ChainGameSnapshot): PlayerFlowStep {
+  if (snapshot.phase === "lobby") return "join";
+  if (snapshot.phase === "signal") return "signal";
+  if (snapshot.phase === "commit") return "commit";
+  if (snapshot.phase === "reveal" || snapshot.phase === "awaiting-settlement") return "reveal";
+  return "result";
 }
 
 function phaseTitle(snapshot: ChainGameSnapshot) {
@@ -268,8 +282,8 @@ function phaseTitle(snapshot: ChainGameSnapshot) {
   if (snapshot.phase === "commit") return "只显示锁定进度，不泄露最终选择。";
   if (snapshot.phase === "reveal") return "玩家正在公开最终选择。";
   if (snapshot.phase === "awaiting-settlement") return "揭晓结束，可以执行结算。";
-  if (snapshot.phase === "settled") return snapshot.game.winnerPacket < 4 ? `${PACKETS[snapshot.game.winnerPacket].name}是本局少数派。` : "本局没有形成少数派。";
-  return "本局已取消，玩家可取回 stake。";
+  if (snapshot.phase === "settled") return snapshot.game.winnerPacket < 4 ? `${PACKETS[snapshot.game.winnerPacket].name}是本轮少数派，可以继续下一轮。` : "本轮没有形成少数派，可以继续下一轮。";
+  return "本轮已取消，玩家可取回投入并继续下一轮。";
 }
 
 function txLabel(tx: TransactionProgress) {

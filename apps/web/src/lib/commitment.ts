@@ -2,7 +2,7 @@ import { encodeAbiParameters, keccak256, parseAbiParameters } from "viem";
 
 export const COMMIT_TYPEHASH = keccak256(
   new TextEncoder().encode(
-    "MinorityRedPacketCommit(uint256 chainId,address verifyingContract,uint256 gameId,address player,uint8 packetId,bytes32 salt)",
+    "MinorityRedPacketCommit(uint256 chainId,address verifyingContract,uint256 gameId,uint64 roundNumber,address player,uint8 packetId,bytes32 salt)",
   ),
 );
 
@@ -10,6 +10,7 @@ export function createCommitment(input: {
   chainId: bigint;
   contractAddress: `0x${string}`;
   gameId: bigint;
+  roundNumber: bigint;
   player: `0x${string}`;
   packetId: number;
   salt: `0x${string}`;
@@ -17,13 +18,14 @@ export function createCommitment(input: {
   return keccak256(
     encodeAbiParameters(
       parseAbiParameters(
-        "bytes32 typehash, uint256 chainId, address verifyingContract, uint256 gameId, address player, uint8 packetId, bytes32 salt",
+        "bytes32 typehash, uint256 chainId, address verifyingContract, uint256 gameId, uint64 roundNumber, address player, uint8 packetId, bytes32 salt",
       ),
       [
         COMMIT_TYPEHASH,
         input.chainId,
         input.contractAddress,
         input.gameId,
+        input.roundNumber,
         input.player,
         input.packetId,
         input.salt,

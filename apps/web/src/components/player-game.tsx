@@ -3,8 +3,11 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Check, LockKeyhole, PartyPopper, ShieldCheck } from "lucide-react";
+import { formatEther } from "viem";
 import { PACKETS, type PacketId } from "@/lib/game-config";
+import { createMockRoundPlayers, settleMockRound } from "@/lib/mock-round";
 import { ChainPlayerGame } from "@/components/chain-player-game";
+import { ChoiceTrail, PacketChoiceGrid, PacketDistribution, PlayerFlowRail, RoundLiveStatus, StakeAmountPicker, type PlayerFlowStep } from "@/components/player-flow-ui";
 
 type PlayerStep = "join" | "signal" | "commit" | "locked" | "reveal" | "result";
 
@@ -18,16 +21,31 @@ function MockPlayerGame() {
   const [name, setName] = useState("");
   const [signalPacket, setSignalPacket] = useState<PacketId | null>(null);
   const [secretPacket, setSecretPacket] = useState<PacketId | null>(null);
+  const [stakeUnits, setStakeUnits] = useState(3);
+  const [round, setRound] = useState(1);
 
   const chosenPacket = useMemo(
     () => PACKETS.find((packet) => packet.id === secretPacket),
     [secretPacket],
   );
+  const roundSummary = useMemo(() => settleMockRound(createMockRoundPlayers({
+    name,
+    signalPacketId: signalPacket ?? 0,
+    secretPacketId: secretPacket ?? 2,
+    stakeUnits,
+  })), [name, secretPacket, signalPacket, stakeUnits]);
+  const publicCounts = useMemo(() => {
+    if (step === "join") return [0, 0, 0, 0];
+    const counts = [...roundSummary.publicCounts];
+    if (signalPacket === null) counts[0] -= 1;
+    return counts;
+  }, [roundSummary.publicCounts, signalPacket, step]);
 
   if (step === "reveal" && chosenPacket) {
     return (
       <main className="phone-reveal" style={{ "--reveal-color": chosenPacket.color, "--reveal-ink": chosenPacket.ink } as React.CSSProperties}>
-        <p>最终选择</p>
+        <RoundLiveStatus roundNumber={round} counts={roundSummary.finalCounts} mode="secret" switchedCount={roundSummary.switchedCount} revealedCount={8} totalPlayers={8} compact />
+        <p>第 {round} 轮 · 最终选择</p>
         <span>{chosenPacket.name}</span>
         <strong>0{chosenPacket.id + 1}<small> · 平票优先级 {chosenPacket.id + 1}</small></strong>
         <div className="raise-phone">现在，举起手机</div>
@@ -37,45 +55,83 @@ function MockPlayerGame() {
   }
 
   if (step === "result" && chosenPacket) {
+    const ownResult = roundSummary.results.find((player) => player.id === "you");
+    const won = ownResult?.won ?? false;
+    const payoutWei = ownResult?.payoutWei ?? 0n;
+    const stakeWei = ownResult?.stakeWei ?? 0n;
+    const netWei = payoutWei - stakeWei;
+    const winnerPacket = roundSummary.winnerPacketId === null ? null : PACKETS[roundSummary.winnerPacketId];
     return (
-      <main className="player-shell result-shell">
-        <div className="confetti-mark"><PartyPopper size={32} /></div>
-        <p className="eyebrow">结算完成 · #M472</p>
-        <h1>{secretPacket === 2 ? "你进入了最小群体" : "这次，你没有进入少数派"}</h1>
-        <div className="result-ticket">
-          <span>获胜红包</span><strong>藤紫 · 优先级 3</strong>
-          <span>获胜人数</span><strong>1 人</strong>
-          <span>模拟可领取</span><strong>{secretPacket === 2 ? "0.08 MON" : "0 MON"}</strong>
-        </div>
-        <button className="mobile-primary" disabled={secretPacket !== 2}>
-          {secretPacket === 2 ? "领取红包" : "本局未获胜"}
-        </button>
-        <button className="mobile-text" onClick={() => setStep("join")}>重新体验</button>
+      <main className="player-shell result-shell mock-result-shell">
+        <header className="player-header">
+          <Link href="/" aria-label="返回首页"><ArrowLeft size={19} /></Link>
+          <span className="mode-tag">本地演示</span>
+          <p>#472 · R{String(round).padStart(2, "0")}</p>
+        </header>
+        <RoundLiveStatus roundNumber={round} counts={roundSummary.finalCounts} mode="secret" switchedCount={roundSummary.switchedCount} revealedCount={8} totalPlayers={8} />
+        <PlayerFlowRail current="result" />
+        <section className="player-panel settlement-panel">
+          <div className={`settlement-hero${won ? " is-won" : " is-lost"}`} style={winnerPacket ? { "--result-color": winnerPacket.color, "--result-ink": winnerPacket.ink } as React.CSSProperties : undefined}>
+            <div className="settlement-hero__label"><span>ROUND RESULT</span><strong>{winnerPacket?.name ?? "—"} · 少数派</strong></div>
+            <h1>{won ? "你站进了真正的少数派" : "你看见了少数派，但不在其中"}</h1>
+            <div className="settlement-hero__numbers">
+              <p><span>模拟可领取</span><strong>{formatEther(payoutWei)}<small> MON</small></strong></p>
+              <p><span>本轮净结果</span><strong>{netWei > 0n ? "+" : ""}{formatEther(netWei)} MON</strong></p>
+              <p><span>你的投入</span><strong>{stakeUnits} MON</strong></p>
+            </div>
+          </div>
+          <ChoiceTrail publicPacketId={signalPacket} secretPacketId={secretPacket} />
+          <PacketDistribution counts={roundSummary.finalCounts} winnerPacketId={roundSummary.winnerPacketId} />
+          <div className="result-section-title public-result-title"><div><span>演示账本</span><h2>每个人的真实提交</h2></div><p>与链上结果页一致</p></div>
+          <div className="public-results">
+            {roundSummary.results.map((player) => {
+              const switched = player.signalPacketId !== player.secretPacketId;
+              return <div className={player.id === "you" ? "is-self" : ""} key={player.id}>
+                <p><code>{player.id === "you" ? `${player.name}（你）` : player.name}</code><small>{formatEther(player.stakeWei)} MON</small></p>
+                <span>{PACKETS[player.signalPacketId].name} → {PACKETS[player.secretPacketId].name}</span>
+                <em>{player.won ? `${formatEther(player.payoutWei)} MON` : "—"}</em>
+                <strong className={`result-behavior is-${switched ? "switched" : "kept"}`}>{switched ? "反水" : "守约"}</strong>
+              </div>;
+            })}
+          </div>
+          <div className="mock-result-note"><PartyPopper size={17} /><span>这是流程演示，不会产生真实资产领取。</span></div>
+          <button className="mobile-text" onClick={() => {
+            setStep("join");
+            setSignalPacket(null);
+            setSecretPacket(null);
+            setRound((current) => current + 1);
+          }}>进入第 {round + 1} 轮</button>
+          <p className="next-round-note">房间 #472 持续有效；下一轮重新选择投入和阵营。</p>
+        </section>
       </main>
     );
   }
+
+  const flowStep: PlayerFlowStep = step === "locked" ? "reveal" : step;
 
   return (
     <main className="player-shell">
       <header className="player-header">
         <Link href="/" aria-label="返回首页"><ArrowLeft size={19} /></Link>
         <span className="mode-tag">本地演示</span>
-        <p>#M472</p>
+        <p>#472 · R{String(round).padStart(2, "0")}</p>
       </header>
+      <RoundLiveStatus roundNumber={round} counts={publicCounts} mode={step === "join" ? "waiting" : "public"} totalPlayers={step === "join" ? 0 : 8} />
+      <PlayerFlowRail current={flowStep} />
 
       {step === "join" && (
         <section className="player-panel join-panel">
           <div className="tiny-packets" aria-hidden="true">
             {PACKETS.map((packet) => <i key={packet.id} style={{ background: packet.color }} />)}
           </div>
-          <p className="eyebrow">你被邀请加入</p>
-          <h1>少数派红包</h1>
-          <p className="mobile-lead">先让大家看到你的站队，再把真正的选择锁进链上。</p>
+          <p className="eyebrow">第 {round} 轮 · 玩家身份</p>
+          <h1>先留下你的名字</h1>
+          <p className="mobile-lead">下一步同时选择公开站队和本轮投入，再进入秘密选择。</p>
           <label>
             你的现场昵称
             <input value={name} onChange={(event) => setName(event.target.value)} maxLength={12} placeholder="例如：小满" />
           </label>
-          <button className="mobile-primary" disabled={!name.trim()} onClick={() => setStep("signal")}>加入游戏</button>
+          <button className="mobile-primary" disabled={!name.trim()} onClick={() => setStep("signal")}>进入第 {round} 轮</button>
           <div className="privacy-note"><ShieldCheck size={16} /> 本地演示：不连接钱包，也不会发送真实交易</div>
         </section>
       )}
@@ -87,7 +143,9 @@ function MockPlayerGame() {
           description="这个选择会显示在大屏上，但不会锁定你的最终答案。"
           selected={signalPacket}
           onSelect={setSignalPacket}
-          button="公开我的站队"
+          button={`确认站队并投入 ${stakeUnits} MON`}
+          stakeUnits={stakeUnits}
+          onStakeChange={setStakeUnits}
           onContinue={() => setStep("commit")}
         />
       )}
@@ -131,6 +189,8 @@ function PacketPicker({
   onSelect,
   button,
   onContinue,
+  stakeUnits,
+  onStakeChange,
   secret = false,
 }: {
   eyebrow: string;
@@ -140,6 +200,8 @@ function PacketPicker({
   onSelect: (packet: PacketId) => void;
   button: string;
   onContinue: () => void;
+  stakeUnits?: number;
+  onStakeChange?: (amount: number) => void;
   secret?: boolean;
 }) {
   return (
@@ -147,20 +209,8 @@ function PacketPicker({
       <p className="eyebrow">{eyebrow}</p>
       <h1>{title}</h1>
       <p className="mobile-lead">{description}</p>
-      <div className="mobile-packets">
-        {PACKETS.map((packet) => (
-          <button
-            key={packet.id}
-            onClick={() => onSelect(packet.id)}
-            className={selected === packet.id ? "mobile-packet is-selected" : "mobile-packet"}
-            style={{ "--packet-color": packet.color, "--packet-ink": packet.ink } as React.CSSProperties}
-            aria-pressed={selected === packet.id}
-          >
-            <span>{packet.name}</span><strong>0{packet.id + 1}</strong><small>平票优先级 {packet.id + 1}</small>
-            {selected === packet.id && <i><Check size={14} /></i>}
-          </button>
-        ))}
-      </div>
+      <PacketChoiceGrid selected={selected} onSelect={onSelect} />
+      {stakeUnits !== undefined && onStakeChange && <div className="public-stake-block"><div className="join-stake-heading"><span>本轮投入金额</span><strong>{stakeUnits} MON</strong></div><StakeAmountPicker value={stakeUnits} onChange={onStakeChange} /></div>}
       {secret && <p className="secret-note"><LockKeyhole size={15} /> 选中后会在本机生成随机 Salt，只向链上提交哈希。</p>}
       <button className="mobile-primary" disabled={selected === null} onClick={onContinue}>{button}</button>
     </section>
