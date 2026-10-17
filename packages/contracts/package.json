@@ -1,0 +1,25 @@
+{
+  "name": "@minority-red-packet/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "hardhat compile",
+    "test": "hardhat test nodejs",
+    "test:all": "hardhat test",
+    "typecheck": "tsc --noEmit",
+    "deploy:testnet": "hardhat ignition deploy ignition/modules/MinorityRedPacket.ts --network monadTestnet",
+    "verify:testnet": "hardhat verify --network monadTestnet"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ignition": "^3.1.8",
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.7",
+    "@types/node": "^22.20.1",
+    "hardhat": "^3.14.0",
+    "typescript": "~7.0.2",
+    "viem": "^2.55.19"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  }
+}

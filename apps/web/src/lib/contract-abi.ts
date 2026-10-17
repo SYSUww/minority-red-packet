@@ -1,0 +1,28 @@
+import { parseAbi } from "viem";
+
+export const minorityRedPacketAbi = parseAbi([
+  "function createGame(uint96[4] packetAmounts, uint64 lobbyBlocks) payable returns (uint256 gameId)",
+  "function registerPlayers(uint256 gameId, address[] players)",
+  "function startGame(uint256 gameId)",
+  "function cancelGame(uint256 gameId)",
+  "function signalChoice(uint256 gameId, uint8 packetId)",
+  "function commitChoice(uint256 gameId, bytes32 commitment)",
+  "function revealChoice(uint256 gameId, uint8 packetId, bytes32 salt)",
+  "function settle(uint256 gameId)",
+  "function claim(uint256 gameId, address recipient)",
+  "function withdrawHostRefund(uint256 gameId, address recipient)",
+  "function sweepExpiredPrize(uint256 gameId, address recipient)",
+  "function phase(uint256 gameId) view returns (uint8)",
+  "function makeCommitment(uint256 gameId, address player, uint8 packetId, bytes32 salt) view returns (bytes32)",
+  "function getPlayers(uint256 gameId) view returns (address[])",
+  "function getPlayerAction(uint256 gameId, address player) view returns (bytes32 commitment, uint8 signalPacket, uint8 revealedPacket, bool joined, bool hasSignaled, bool revealed, bool claimed)",
+  "function getRevealedCounts(uint256 gameId) view returns (uint8[4])",
+  "event GameCreated(uint256 indexed gameId, address indexed host, uint96[4] packetAmounts, uint256 deposit, uint64 joinEndBlock)",
+  "event PlayersRegistered(uint256 indexed gameId, address[] players)",
+  "event GameStarted(uint256 indexed gameId, uint64 startBlock, uint64 signalEndBlock, uint64 commitEndBlock, uint64 revealEndBlock)",
+  "event SignalUpdated(uint256 indexed gameId, address indexed player, uint8 packetId)",
+  "event ChoiceCommitted(uint256 indexed gameId, address indexed player, bytes32 commitment)",
+  "event ChoiceRevealed(uint256 indexed gameId, address indexed player, uint8 packetId)",
+  "event GameSettled(uint256 indexed gameId, uint8[4] counts, uint8 winnerPacket, uint8 winnerCount, uint256 share, uint256 hostRefund, uint64 claimEndBlock)",
+  "event PrizeClaimed(uint256 indexed gameId, address indexed player, address indexed recipient, uint256 amount)",
+]);
